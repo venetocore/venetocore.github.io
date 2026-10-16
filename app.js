@@ -142,6 +142,7 @@
         sb.from("supplier_orders").select("id,created_at,tee_id,tee_name,qty,unit_cost,status,received_at,by_email").order("created_at", { ascending: false }).limit(1000),
         sb.from("settings").select("price,cost")
       ]);
+      if ([a, b, c, d, e].some((x) => x.error && x.error.code === "PGRST205")) { const er = new Error("Il database va aggiornato: in Supabase apri SQL Editor, incolla supabase/schema.sql e premi Run."); er.dbUpdate = true; throw er; }
       if (a.error) throw a.error; if (b.error) throw b.error; if (c.error) throw c.error; if (d.error) throw d.error; if (e.error) throw e.error;
       const missing = [];
       a.data.forEach((t) => {
@@ -194,7 +195,7 @@
     if (loading) { again = true; return; }
     loading = true;
     try { const r = await api.load(); tees = r.tees; moves = r.moves; sales = r.sales || []; orders = r.orders || []; defs = r.defs || { price: null, cost: null }; renderMain(); setSync(LIVE ? "Aggiornato alle " + new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : "Modalità prova: dati solo su questo dispositivo"); }
-    catch (e) { setSync("Non riesco a caricare i dati. Controlla la connessione e riprova."); console.error(e); }
+    catch (e) { if (e && e.dbUpdate) { setSync(e.message); toast(e.message); } else setSync("Non riesco a caricare i dati. Controlla la connessione e riprova."); console.error(e); }
     loading = false;
     if (again) { again = false; reload(); }
   }
@@ -385,6 +386,10 @@
   const when = (v) => { const d = new Date(v); return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit" }) + " " + d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }); };
   const orderPieces = (o) => Object.values(o.qty || {}).reduce((a, n) => a + num(n), 0);
   const orderSizesText = (o) => SIZES.filter((s) => num((o.qty || {})[s]) > 0).map((s) => s + " × " + o.qty[s]).join(", ");
+  const mini = (id, cls) => {
+    const t = tees.find((x) => x.id === id);
+    return t && t.image ? `<span class="mini${cls ? " " + cls : ""}"><img src="${esc(t.image)}" alt="" loading="lazy"></span>` : `<span class="mini none${cls ? " " + cls : ""}"></span>`;
+  };
   const byWho = (r) => (r.by_email ? ` · ${esc(r.by_email.split("@")[0])}` : "");
 
   const STATUSES = [["ordinato", "Ordinato"], ["pagato", "Pagato"], ["spedito", "Spedito"], ["consegnato", "Consegnato"], ["annullato", "Annullato"]];
@@ -406,7 +411,7 @@
       </div>
       ${list.length ? `<ol class="recs">${list.map((o) => `<li class="rec sale st-${esc(o.status)}">
         <div class="rec-main"><b class="d">${esc(o.customer)}</b>
-          <ul class="items">${(o.items || []).map((it) => `<li><span>${esc(it.tee_name || "Modello eliminato")} · ${esc(it.size)}${num(it.qty) > 1 ? " × " + num(it.qty) : ""}</span><span>${eur(num(it.unit_price) * num(it.qty))}</span></li>`).join("")}</ul>
+          <ul class="items">${(o.items || []).map((it) => `<li><span class="it">${mini(it.tee_id)}<span>${esc(it.tee_name || "Modello eliminato")} · ${esc(it.size)}${num(it.qty) > 1 ? " × " + num(it.qty) : ""}</span></span><span>${eur(num(it.unit_price) * num(it.qty))}</span></li>`).join("")}</ul>
           ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
           <div class="meta">${when(o.created_at)} · ${esc(o.payment)}${byWho(o)}</div></div>
         <div class="rec-side"><b class="amt">${eur(saleTotal(o))}</b>
@@ -425,7 +430,7 @@
       <ol class="recs">${orders.map((o) => {
         const got = o.status === "ricevuto", n = orderPieces(o);
         return `<li class="rec">
-        <div class="rec-main"><b class="d">${esc(o.tee_name || "Design eliminato")}</b>
+        <div class="rec-main"><b class="d with-mini">${mini(o.tee_id, "lg")}<span>${esc(o.tee_name || "Modello eliminato")}</span></b>
           <div>${esc(orderSizesText(o))} · ${n} pezzi</div>
           <div class="meta">Ordinato il ${when(o.created_at)}${byWho(o)}${got && o.received_at ? " · arrivato il " + when(o.received_at) : ""}</div></div>
         <div class="rec-side"><b class="amt">${eur(num(o.unit_cost) * n)}</b>
@@ -448,14 +453,14 @@
       (o.items || []).forEach((it) => {
         const q = num(it.qty), r = num(it.unit_price) * q, c = num(it.unit_cost) * q, name = it.tee_name || "Modello eliminato";
         rev += r; cogs += c; pcs += q; if (it.unit_cost == null) nocost++;
-        const m = byTee[name] || (byTee[name] = { q: 0, r: 0, c: 0 }); m.q += q; m.r += r; m.c += c;
+        const m = byTee[name] || (byTee[name] = { q: 0, r: 0, c: 0, id: it.tee_id }); m.q += q; m.r += r; m.c += c;
       });
     });
     const spent = O.reduce((a, o) => a + num(o.unit_cost) * orderPieces(o), 0);
     const profit = rev - cogs, margin = rev > 0 ? Math.round((profit / rev) * 100) + "%" : "–";
     const stockVal = tees.reduce((a, t) => a + total(t) * num(costOf(t)), 0);
     const cell = (b, l, cls) => `<div class="stat${cls ? " " + cls : ""}"><b>${b}</b><span>${l}</span></div>`;
-    const rows = (obj, fmt) => Object.entries(obj).sort((a, b) => fmt.sort(b[1]) - fmt.sort(a[1])).map(([k, x]) => `<li><span>${esc(k)}</span><span>${fmt.text(x)}</span></li>`).join("");
+    const rows = (obj, fmt) => Object.entries(obj).sort((a, b) => fmt.sort(b[1]) - fmt.sort(a[1])).map(([k, x]) => `<li><span class="it">${fmt.icon ? fmt.icon(x) : ""}<span>${esc(k)}</span></span><span>${fmt.text(x)}</span></li>`).join("");
     v.innerHTML = `<section class="hero"><h1 class="g">Guadagni</h1></section>
       <div class="bar">
         <button class="chipbtn" data-period="all" aria-pressed="${period === "all"}">Sempre</button>
@@ -467,7 +472,7 @@
       </div>
       <p class="hint">Guadagno = venduto meno il costo dei pezzi venduti. Gli ordini annullati non contano. «Da incassare» sono gli ordini ancora nello stato Ordinato.</p>
       ${nocost ? `<p class="hint warn">Per ${nocost} righe vendute manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo standard con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
-      ${S.length ? `<section class="log"><h2 class="g">Per modello</h2><ol class="rows">${rows(byTee, { sort: (x) => x.r - x.c, text: (x) => `${x.q} pz · <b>${eur(x.r - x.c)}</b>` })}</ol></section>
+      ${S.length ? `<section class="log"><h2 class="g">Per modello</h2><ol class="rows">${rows(byTee, { icon: (x) => mini(x.id), sort: (x) => x.r - x.c, text: (x) => `${x.q} pz · <b>${eur(x.r - x.c)}</b>` })}</ol></section>
       <section class="log"><h2 class="g">Per pagamento</h2><ol class="rows">${rows(byPay, { sort: (x) => x, text: (x) => `<b>${eur(x)}</b>` })}</ol></section>` : `<div class="empty"><span class="d">Ancora niente</span>I guadagni compaiono dopo la prima vendita.</div>`}`;
   }
 
