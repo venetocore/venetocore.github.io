@@ -236,7 +236,11 @@
       btn.disabled = true; $("#loginMsg").textContent = "";
       const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname } });
       btn.disabled = false;
-      $("#loginMsg").textContent = error ? "Questa email non è abilitata. Chiedi a chi gestisce il magazzino di aggiungerti." : "Link inviato: apri la mail da questo dispositivo.";
+      const code = error && (error.code || "");
+      $("#loginMsg").textContent = !error ? "Link inviato: apri la mail da questo dispositivo."
+        : code === "otp_disabled" || code === "user_not_found" ? "Questa email non è abilitata. Chiedi a chi gestisce il magazzino di aggiungerti."
+        : error.status === 429 || /rate.?limit/i.test(code) ? "Troppi tentativi: aspetta qualche minuto e riprova."
+        : "Non sono riuscito a mandare il link (" + (error.message || "errore") + "). Riprova tra poco.";
     });
   }
 
