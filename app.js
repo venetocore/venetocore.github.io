@@ -110,18 +110,22 @@
     },
     async saveOrder(d) {
       const s = this.read(), now = Date.now();
-      s.orders.unshift({ id: now + Math.random(), created_at: now, tee_id: d.tee_id, tee_name: d.tee_name, qty: d.qty, unit_cost: d.unit_cost, status: "ordinato", received_at: null, by_email: "" });
+      s.orders.unshift({ id: now + Math.random(), created_at: now, items: d.items, status: "ordinato", received_at: null, by_email: "" });
       this.write(s);
     },
     async receiveOrder(id) {
       const s = this.read(), o = s.orders.find((r) => String(r.id) === String(id));
-      if (!o || o.status === "ricevuto") throw new Error("Ordine già ricevuto");
-      const t = s.tees.find((y) => y.id === o.tee_id); if (!t) throw new Error("Il design di questo ordine è stato eliminato");
+      if (!o || o.status === "ricevuto") throw new Error("Ristampa già arrivata");
+      const L = linesOf(o);
+      L.forEach((l) => { if (!s.tees.find((y) => y.id === l.tee_id)) throw new Error(`Il modello ${l.tee_name || ""} di questa ristampa è stato eliminato`); });
       const now = Date.now();
-      Object.keys(o.qty).forEach((z) => {
-        const n = o.qty[z] || 0; if (n <= 0) return;
-        t.stock[z] = (t.stock[z] || 0) + n;
-        s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: z, delta: n, by_email: "" });
+      L.forEach((l) => {
+        const t = s.tees.find((y) => y.id === l.tee_id);
+        Object.keys(l.qty || {}).forEach((z) => {
+          const n = l.qty[z] || 0; if (n <= 0) return;
+          t.stock[z] = (t.stock[z] || 0) + n;
+          s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: z, delta: n, by_email: "" });
+        });
       });
       s.moves = s.moves.slice(0, 50);
       o.status = "ricevuto"; o.received_at = now;
@@ -139,7 +143,7 @@
         sb.from("tees").select("id,name,color,price,cost,threshold,image,created_at,stock(size,qty)").order("created_at"),
         sb.from("moves").select("id,created_at,tee_name,size,delta,by_email").order("created_at", { ascending: false }).limit(20),
         sb.from("customer_orders").select("id,created_at,customer,payment,status,note,by_email,items:customer_order_items(id,tee_id,tee_name,size,qty,unit_price,unit_cost)").order("created_at", { ascending: false }).limit(1000),
-        sb.from("supplier_orders").select("id,created_at,tee_id,tee_name,qty,unit_cost,status,received_at,by_email").order("created_at", { ascending: false }).limit(1000),
+        sb.from("supplier_orders").select("id,created_at,tee_id,tee_name,qty,unit_cost,items,status,received_at,by_email").order("created_at", { ascending: false }).limit(1000),
         sb.from("settings").select("price,cost")
       ]);
       if ([a, b, c, d, e].some((x) => x.error && x.error.code === "PGRST205")) { const er = new Error("Il database va aggiornato: in Supabase apri SQL Editor, incolla supabase/schema.sql e premi Run."); er.dbUpdate = true; throw er; }
@@ -176,7 +180,7 @@
     async createSale(d) { const { error } = await sb.rpc("create_customer_order", { p_customer: d.customer, p_payment: d.payment, p_status: d.status, p_note: d.note || "", p_items: d.items.map((it) => ({ tee_id: it.tee_id, size: it.size, qty: it.qty, price: it.price })) }); if (error) throw error; },
     async setSaleStatus(id, st) { const { error } = await sb.rpc("set_customer_order_status", { p_id: id, p_status: st }); if (error) throw error; },
     async deleteSale(id) { const { error } = await sb.rpc("delete_customer_order", { p_id: id }); if (error) throw error; },
-    async saveOrder(d) { const { error } = await sb.from("supplier_orders").insert({ tee_id: d.tee_id, tee_name: d.tee_name, qty: d.qty, unit_cost: d.unit_cost }); if (error) throw error; },
+    async saveOrder(d) { const { error } = await sb.from("supplier_orders").insert({ items: d.items }); if (error) throw error; },
     async receiveOrder(id) { const { error } = await sb.rpc("receive_order", { p_id: id }); if (error) throw error; },
     async deleteOrder(id) { const { error } = await sb.from("supplier_orders").delete().eq("id", id); if (error) throw error; },
     async deleteTee(id) { const { error } = await sb.from("tees").delete().eq("id", id); if (error) throw error; },
@@ -384,8 +388,12 @@
   const priceOf = (t) => (t.price != null ? t.price : defs.price);
   const costOf = (t) => (t.cost != null ? t.cost : defs.cost);
   const when = (v) => { const d = new Date(v); return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit" }) + " " + d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }); };
-  const orderPieces = (o) => Object.values(o.qty || {}).reduce((a, n) => a + num(n), 0);
-  const orderSizesText = (o) => SIZES.filter((s) => num((o.qty || {})[s]) > 0).map((s) => s + " × " + o.qty[s]).join(", ");
+  const qtySum = (q) => Object.values(q || {}).reduce((a, n) => a + num(n), 0);
+  const sizesText = (q) => SIZES.filter((s) => num((q || {})[s]) > 0).map((s) => s + " × " + q[s]).join(", ");
+  // una ristampa ha più righe (modello, pezzi per taglia, costo); quelle vecchie avevano un solo modello
+  const linesOf = (o) => (o.items && o.items.length ? o.items : [{ tee_id: o.tee_id, tee_name: o.tee_name, qty: o.qty || {}, unit_cost: o.unit_cost }]);
+  const orderPieces = (o) => linesOf(o).reduce((a, l) => a + qtySum(l.qty), 0);
+  const orderCost = (o) => linesOf(o).reduce((a, l) => a + num(l.unit_cost) * qtySum(l.qty), 0);
   const mini = (id, cls) => {
     const t = tees.find((x) => x.id === id);
     return t && t.image ? `<span class="mini${cls ? " " + cls : ""}"><img src="${esc(t.image)}" alt="" loading="lazy"></span>` : `<span class="mini none${cls ? " " + cls : ""}"></span>`;
@@ -425,15 +433,15 @@
     const v = $("#v-orders"); if (!v) return;
     const waiting = orders.filter((o) => o.status !== "ricevuto").reduce((a, o) => a + orderPieces(o), 0);
     v.innerHTML = `<section class="hero"><h1 class="g">Ristampe</h1></section>
-      <p class="hint">Registra qui le magliette che fai ristampare. Quando arrivano tocca «Arrivata»: i pezzi entrano in magazzino.</p>
+      <p class="hint">Registra qui le magliette che fai ristampare, anche più modelli insieme. Quando arrivano tocca «Arrivata»: i pezzi entrano in magazzino.</p>
       ${orders.length ? `<div class="sumline"><b>${waiting}</b> pezzi in arrivo</div>
       <ol class="recs">${orders.map((o) => {
-        const got = o.status === "ricevuto", n = orderPieces(o);
+        const got = o.status === "ricevuto", n = orderPieces(o), L = linesOf(o);
         return `<li class="rec">
-        <div class="rec-main"><b class="d with-mini">${mini(o.tee_id, "lg")}<span>${esc(o.tee_name || "Modello eliminato")}</span></b>
-          <div>${esc(orderSizesText(o))} · ${n} pezzi</div>
-          <div class="meta">Ordinata il ${when(o.created_at)}${byWho(o)}${got && o.received_at ? " · arrivata il " + when(o.received_at) : ""}</div></div>
-        <div class="rec-side"><b class="amt">${eur(num(o.unit_cost) * n)}</b>
+        <div class="rec-main"><b class="d">${L.length > 1 ? `${L.length} modelli` : esc(L[0].tee_name || "Modello eliminato")}</b>
+          <ul class="items">${L.map((l) => `<li><span class="it">${mini(l.tee_id)}<span>${L.length > 1 ? esc(l.tee_name || "Modello eliminato") + " · " : ""}${esc(sizesText(l.qty))}</span></span><span>${eur(num(l.unit_cost) * qtySum(l.qty))}</span></li>`).join("")}</ul>
+          <div class="meta">${n} pezzi · ordinata il ${when(o.created_at)}${byWho(o)}${got && o.received_at ? " · arrivata il " + when(o.received_at) : ""}</div></div>
+        <div class="rec-side"><b class="amt">${eur(orderCost(o))}</b>
           ${got ? `<span class="badge done">Arrivata</span>` : `<span class="badge">In arrivo</span><button class="btn small" data-ord-recv="${esc(o.id)}">Arrivata</button><button class="link" data-ord-del="${esc(o.id)}">Elimina</button>`}
         </div>
       </li>`; }).join("")}</ol>`
@@ -456,7 +464,7 @@
         const m = byTee[name] || (byTee[name] = { q: 0, r: 0, c: 0, id: it.tee_id }); m.q += q; m.r += r; m.c += c;
       });
     });
-    const spent = O.reduce((a, o) => a + num(o.unit_cost) * orderPieces(o), 0);
+    const spent = O.reduce((a, o) => a + orderCost(o), 0);
     const profit = rev - cogs, margin = rev > 0 ? Math.round((profit / rev) * 100) + "%" : "–";
     const stockVal = tees.reduce((a, t) => a + total(t) * num(costOf(t)), 0);
     const cell = (b, l, cls) => `<div class="stat${cls ? " " + cls : ""}"><b>${b}</b><span>${l}</span></div>`;
@@ -582,32 +590,51 @@
   }
 
   function openOrderForm() {
-    if (!tees.length) { toast("Aggiungi prima un design nel Magazzino"); return; }
+    if (!tees.length) { toast("Aggiungi prima un modello nel Magazzino"); return; }
     const d = $("#dlg");
     d.innerHTML = `<form class="dlg" id="of">
       <h3 class="g">Nuova ristampa</h3>
-      <label class="field"><span>Modello</span><select name="tee">${tees.map((t) => `<option value="${esc(t.id)}">${teeLabel(t)}</option>`).join("")}</select></label>
-      <div class="field"><span>Pezzi per taglia</span><div class="row">${SIZES.map((s) => `<label class="field"><span>${s}</span><input name="q_${s}" type="number" inputmode="numeric" min="0" step="1" placeholder="0"></label>`).join("")}</div></div>
-      <label class="field"><span>Costo cad. dal fornitore €</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.01" required></label>
-      <div class="total" id="stot"></div>
+      <div id="lines"></div>
+      <button type="button" class="btn ghost addline" id="addLine">+ Aggiungi un altro modello</button>
+      <div class="total" id="stot" style="margin-top:14px"></div>
       <div class="err" id="ferr" role="alert"></div>
       <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Salva ristampa</button></div>
     </form>`;
-    const f = $("#of"), el = f.elements, teeOf = () => tees.find((t) => t.id === el.tee.value);
-    const qtys = () => { const q = {}; SIZES.forEach((s) => { const n = parseInt(el["q_" + s].value, 10); if (n > 0) q[s] = n; }); return q; };
-    const upd = () => { const n = Object.values(qtys()).reduce((a, b) => a + b, 0), c = parseFloat(el.cost.value); $("#stot").textContent = n > 0 ? n + " pezzi" + (!isNaN(c) ? " · Totale: " + eur(n * c) : "") : ""; };
-    el.tee.onchange = () => { const t = teeOf(); el.cost.value = costOf(t) != null ? costOf(t) : ""; upd(); };
+    const f = $("#of"), L = $("#lines");
+    const q = (ln, k) => ln.querySelector(`[data-k="${k}"]`);
+    const lineHTML = () => `<div class="line">
+        <label class="field"><span>Modello</span><select data-k="tee">${tees.map((t) => `<option value="${esc(t.id)}">${teeLabel(t)}</option>`).join("")}</select></label>
+        <div class="field"><span>Pezzi per taglia</span><div class="row">${SIZES.map((s) => `<label class="field"><span>${s}</span><input data-k="q_${s}" type="number" inputmode="numeric" min="0" step="1" placeholder="0"></label>`).join("")}</div></div>
+        <label class="field"><span>Costo cad. dal fornitore €</span><input data-k="cost" type="number" inputmode="decimal" min="0" step="0.01"></label>
+        <button type="button" class="link rm" data-rm>Rimuovi</button>
+      </div>`;
+    const qtyOf = (ln) => { const o = {}; SIZES.forEach((s) => { const n = parseInt(q(ln, "q_" + s).value, 10); if (n > 0) o[s] = n; }); return o; };
+    const setTee = (ln) => { const t = tees.find((x) => x.id === q(ln, "tee").value); q(ln, "cost").value = costOf(t) != null ? costOf(t) : ""; };
+    const upd = () => {
+      const lines = [...L.children]; let n = 0, tot = 0;
+      lines.forEach((ln) => { const k = qtySum(qtyOf(ln)), c = parseFloat(q(ln, "cost").value); n += k; if (!isNaN(c)) tot += k * c; });
+      lines.forEach((ln) => (ln.querySelector("[data-rm]").hidden = lines.length < 2));
+      $("#stot").textContent = n ? `${n} ${n === 1 ? "pezzo" : "pezzi"} · Totale: ${eur(tot)}` : "";
+    };
+    const add = () => { L.insertAdjacentHTML("beforeend", lineHTML()); setTee(L.lastElementChild); upd(); };
+    L.addEventListener("change", (e) => { if (e.target.dataset.k === "tee") { setTee(e.target.closest(".line")); upd(); } });
+    L.addEventListener("click", (e) => { const rm = e.target.closest("[data-rm]"); if (rm && L.children.length > 1) { rm.closest(".line").remove(); upd(); } });
     f.addEventListener("input", upd);
-    el.tee.onchange();
+    $("#addLine").onclick = add;
+    add();
     $("#cancel").onclick = () => d.close();
     f.onsubmit = async (e) => {
       e.preventDefault();
-      const qty = qtys(), cost = parseFloat(el.cost.value), t = teeOf();
-      if (!Object.keys(qty).length) { $("#ferr").textContent = "Metti almeno un pezzo in una taglia."; return; }
-      if (!(cost >= 0)) { $("#ferr").textContent = "Inserisci il costo dal fornitore."; return; }
+      const items = [];
+      for (const ln of L.children) {
+        const qty = qtyOf(ln), cost = parseFloat(q(ln, "cost").value), t = tees.find((x) => x.id === q(ln, "tee").value);
+        if (!Object.keys(qty).length) { $("#ferr").textContent = `Metti almeno un pezzo per ${t.name}.`; return; }
+        if (!(cost >= 0)) { $("#ferr").textContent = `Inserisci il costo per ${t.name}.`; return; }
+        items.push({ tee_id: t.id, tee_name: t.name, qty, unit_cost: cost });
+      }
       $("#save").disabled = true; $("#ferr").textContent = "";
-      try { await api.saveOrder({ tee_id: t.id, tee_name: t.name, qty, unit_cost: cost }); d.close(); toast("Ristampa salvata"); reload(); }
-      catch (er) { $("#ferr").textContent = "Non salvato: " + (er.message || "errore"); $("#save").disabled = false; }
+      try { await api.saveOrder({ items }); d.close(); toast("Ristampa salvata"); reload(); }
+      catch (er) { $("#ferr").textContent = "Non salvata: " + (er.message || "errore"); $("#save").disabled = false; }
     };
     d.showModal();
   }
@@ -626,7 +653,7 @@
     }
     if (b.dataset.ordRecv) {
       const x = orders.find((r) => String(r.id) === b.dataset.ordRecv); if (!x) return;
-      if (confirm(`La ristampa è arrivata? Aggiungo ${orderPieces(x)} pezzi di "${x.tee_name}" al magazzino.`)) {
+      if (confirm(`La ristampa è arrivata? Aggiungo ${orderPieces(x)} pezzi di ${linesOf(x).map((l) => l.tee_name).join(", ")} al magazzino.`)) {
         b.disabled = true;
         api.receiveOrder(b.dataset.ordRecv).then(() => { toast("Magazzino aggiornato"); reload(); }).catch((er) => { b.disabled = false; fail(er); });
       }
@@ -634,7 +661,7 @@
     }
     if (b.dataset.ordDel) {
       const x = orders.find((r) => String(r.id) === b.dataset.ordDel); if (!x) return;
-      if (confirm(`Eliminare la ristampa di "${x.tee_name}"?`)) api.deleteOrder(b.dataset.ordDel).then(() => { toast("Ristampa eliminata"); reload(); }).catch(fail);
+      if (confirm(`Eliminare la ristampa di ${linesOf(x).map((l) => l.tee_name).join(", ")}?`)) api.deleteOrder(b.dataset.ordDel).then(() => { toast("Ristampa eliminata"); reload(); }).catch(fail);
       return;
     }
     if (b.dataset.b) { const [id, s, d] = b.dataset.b.split("|"); return bump(id, s, +d); }

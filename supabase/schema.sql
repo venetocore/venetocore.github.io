@@ -93,6 +93,10 @@ create table if not exists public.supplier_orders (
   received_at timestamptz,
   by_email text default (auth.jwt() ->> 'email')
 );
+-- Ristampe con più modelli: righe in items [{tee_id, tee_name, qty: {S: 10}, unit_cost}]
+alter table public.supplier_orders add column if not exists items jsonb;
+alter table public.supplier_orders alter column qty drop not null;
+alter table public.supplier_orders alter column unit_cost drop not null;
 
 -- 3. Regola base: solo chi è nella tabella team vede e modifica
 create or replace function public.is_team()
@@ -247,19 +251,32 @@ grant execute on function public.customer_order_stock(bigint, int) to authentica
 grant execute on function public.set_customer_order_status(bigint, text) to authenticated;
 grant execute on function public.delete_customer_order(bigint) to authenticated;
 
--- Ordine fornitore arrivato: aggiunge i pezzi al magazzino, una sola volta
+-- Ristampa arrivata: aggiunge i pezzi di ogni modello al magazzino, una sola volta.
+-- Le ristampe nuove hanno le righe in items; quelle vecchie usano tee_id e qty.
 create or replace function public.receive_order(p_id bigint)
 returns void language plpgsql security invoker set search_path = public as $$
-declare v_o public.supplier_orders; k text; v text;
+declare v_o public.supplier_orders; line jsonb; v_tee uuid; k text; v text;
 begin
   if not public.is_team() then raise exception 'Non autorizzato'; end if;
   select * into v_o from public.supplier_orders where id = p_id for update;
-  if not found then raise exception 'Ordine non trovato'; end if;
-  if v_o.status = 'ricevuto' then raise exception 'Ordine già ricevuto'; end if;
-  if v_o.tee_id is null then raise exception 'Il design di questo ordine è stato eliminato'; end if;
-  for k, v in select * from jsonb_each_text(v_o.qty) loop
-    if v::int > 0 then perform public.adjust_stock(v_o.tee_id, k, v::int); end if;
-  end loop;
+  if not found then raise exception 'Ristampa non trovata'; end if;
+  if v_o.status = 'ricevuto' then raise exception 'Ristampa già arrivata'; end if;
+  if v_o.items is not null and jsonb_array_length(v_o.items) > 0 then
+    for line in select * from jsonb_array_elements(v_o.items) loop
+      v_tee := (line ->> 'tee_id')::uuid;
+      if not exists (select 1 from public.tees where id = v_tee) then
+        raise exception 'Il modello % di questa ristampa è stato eliminato', line ->> 'tee_name';
+      end if;
+      for k, v in select * from jsonb_each_text(line -> 'qty') loop
+        if v::int > 0 then perform public.adjust_stock(v_tee, k, v::int); end if;
+      end loop;
+    end loop;
+  else
+    if v_o.tee_id is null then raise exception 'Il modello di questa ristampa è stato eliminato'; end if;
+    for k, v in select * from jsonb_each_text(v_o.qty) loop
+      if v::int > 0 then perform public.adjust_stock(v_o.tee_id, k, v::int); end if;
+    end loop;
+  end if;
   update public.supplier_orders set status = 'ricevuto', received_at = now() where id = p_id;
 end $$;
 
