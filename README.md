@@ -9,6 +9,14 @@ Gestione interna della scorta magliette. Sito statico su GitHub Pages, dati su S
 - `supabase/seed.sql`: email del team e i tre design di partenza.
 - `img/`: foto dei design iniziali. Quelle nuove si caricano dall'app e finiscono su Supabase Storage.
 
+## Sezioni dell'app
+- **Magazzino**: giacenze per taglia. In Impostazioni → *Modifica design, prezzi e costi* si imposta per ogni modello il prezzo di vendita e il costo dal fornitore.
+- **Vendite**: ordini dei clienti (nome, modello, taglia, quantità, pagamento). Ogni vendita scala il magazzino; eliminarla rimette i pezzi. Prezzo e costo restano quelli del giorno della vendita.
+- **Fornitore**: ordini che fate al fornitore, con pezzi per taglia. Con «Arrivato» i pezzi entrano in magazzino (una sola volta).
+- **Guadagni**: incassato, costo dei pezzi venduti, guadagno e margine, spesa al fornitore, valore del magazzino. Filtro *Sempre* / *Questo mese*, dettaglio per modello e per metodo di pagamento.
+
+Se avevi già eseguito `schema.sql` su Supabase, rieseguilo: aggiunge le nuove tabelle e il costo ai design senza toccare i dati.
+
 ## Messa online
 
 ### 1. GitHub

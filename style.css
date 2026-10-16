@@ -131,4 +131,32 @@ dialog::backdrop{background:rgba(0,0,0,.75)}
   dialog{width:100%;max-width:100%;height:100%;max-height:100%;border:0;margin:0}
   .dlg{padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px))}
 }
+/* sezioni */
+.tabs{display:flex;max-width:1100px;margin:0 auto;border-top:1px solid var(--rule)}
+.tabs[hidden]{display:none}
+.tabs button{flex:1;background:transparent;border:0;border-bottom:4px solid transparent;padding:12px 4px 9px;min-height:48px;font-weight:800;font-size:14px;color:var(--mid);cursor:pointer}
+.tabs button[aria-current="page"]{color:var(--fg);border-bottom-color:var(--fg)}
+.sync{margin:10px 0 0;min-height:18px}
+.hint{color:var(--mid);font-size:14px;margin:14px 0 0}
+.hint.warn{color:var(--fg);border:2px dashed var(--fg);padding:10px 12px}
+.sumline{margin:16px 0 4px;font-size:15px}
+.sumline b{font-family:"Anton",Impact,sans-serif;font-weight:400;font-size:24px}
+.recs{list-style:none;margin:0;padding:0}
+.rec{display:grid;grid-template-columns:1fr auto;gap:12px;padding:14px 0;border-bottom:1px solid var(--rule)}
+.rec-main .d{font-size:24px;display:block;margin-bottom:4px;word-break:break-word}
+.rec-main .meta{color:var(--mid);font-size:13px;margin-top:2px}
+.rec-side{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.amt{font-family:"Anton",Impact,sans-serif;font-weight:400;font-size:26px;line-height:1}
+.badge{border:2px solid var(--fg);font-size:12px;font-weight:800;padding:2px 8px}
+.badge.done{background:var(--fg);color:var(--bg)}
+.btn.small{padding:8px 14px;min-height:44px}
+.rows{list-style:none;margin:0;padding:0;font-size:15px}
+.rows li{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.stats.grid{gap:2px;background:var(--fg)}
+.stats.grid .stat{background:var(--bg);border:0}
+.stats.grid .stat.alert{background:var(--fg)}
+.total{font-weight:800;min-height:24px;margin-bottom:10px}
+@media (max-width:640px){
+  .stats.grid .stat:nth-child(-n+2){border-bottom:0}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
