@@ -13,7 +13,7 @@
   let tees = [];      // {id,name,color,price,threshold,image,created_at,stock:{S:3}}
   let moves = [];     // {id,created_at,tee_name,size,delta,by_email}
   let session = null;
-  let query = "", onlyLow = false;
+  let editMode = false, onlyLow = false;
   const pending = {}; // "teeId|size" -> delta not yet saved
   const timers = {};
 
@@ -146,6 +146,7 @@
   const orderSizes = (t) => SIZES.filter((s) => s in t.stock);
 
   function renderLogin(msg) {
+    editMode = false;
     $("#fab").hidden = true; $("#who").innerHTML = "";
     $("#app").innerHTML = `<section class="login">
       <h1 class="g">Magazzino</h1>
@@ -166,7 +167,7 @@
   }
 
   function renderShell() {
-    $("#fab").hidden = false;
+    $("#fab").hidden = !editMode;
     if (LIVE && session) {
       $("#who").innerHTML = `<span>${esc(session.user.email)}</span><button class="link" id="logout">Esci</button>`;
       $("#logout").onclick = async () => { await sb.auth.signOut(); };
@@ -174,14 +175,22 @@
     $("#app").innerHTML = `
       <section class="hero"><h1 class="g">Magazzino</h1><div class="stats" id="stats"></div></section>
       <div class="bar">
-        <input class="search" id="q" type="search" placeholder="Cerca un design" aria-label="Cerca un design" value="${esc(query)}">
         <button class="chipbtn" id="lowBtn" aria-pressed="${onlyLow}">Da riordinare</button>
+        <details class="menu">
+          <summary class="chipbtn">Menu</summary>
+          <div class="menu-panel"><button class="menu-action" id="editToggle">${editMode ? "Esci da modalità Modifica" : "Attiva modalità Modifica"}</button></div>
+        </details>
         <span class="sync" id="sync"></span>
+      </div>
+      <div class="edit-notice" id="editNotice" ${editMode ? "" : "hidden"}>
+        <span><strong>Modalità Modifica attiva</strong><br>Puoi aggiungere, modificare o eliminare design.</span>
+        <button class="btn ghost" id="finishEdit">Fine</button>
       </div>
       <div id="list"></div>
       <section class="log" id="logWrap" hidden><h2 class="g">Movimenti</h2><ol id="log"></ol></section>`;
-    $("#q").addEventListener("input", (e) => { query = e.target.value; renderMain(); });
     $("#lowBtn").addEventListener("click", (e) => { onlyLow = !onlyLow; e.currentTarget.setAttribute("aria-pressed", onlyLow); renderMain(); });
+    $("#editToggle").addEventListener("click", () => { editMode = !editMode; renderShell(); renderMain(); });
+    $("#finishEdit").addEventListener("click", () => { editMode = false; renderShell(); renderMain(); });
   }
 
   function renderMain() {
@@ -195,13 +204,12 @@
       <div class="stat${low ? " alert" : ""}"><b>${low}</b><span>taglie quasi finite</span></div>
       <div class="stat${out ? " alert" : ""}"><b>${out}</b><span>taglie esaurite</span></div>`;
 
-    const q = query.trim().toLowerCase();
-    const list = tees.filter((t) => (!q || t.name.toLowerCase().includes(q)) && (!onlyLow || hasIssue(t)));
+    const list = tees.filter((t) => !onlyLow || hasIssue(t));
     const L = $("#list");
     // keep focus on the qty field being typed into
     const act = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.set;
     if (!tees.length) L.innerHTML = `<div class="empty"><span class="d">Magazzino vuoto</span>Aggiungi il primo design per iniziare a contare.</div>`;
-    else if (!list.length) L.innerHTML = `<div class="empty"><span class="d">Niente qui</span>${onlyLow ? "Nessuna taglia da riordinare." : "Nessun design con questo nome."}</div>`;
+    else if (!list.length) L.innerHTML = `<div class="empty"><span class="d">Niente qui</span>Nessuna taglia da riordinare.</div>`;
     else L.innerHTML = list.map((t) => {
       const meta = ["maglietta " + (COLORS[t.color] || t.color), t.price != null ? eur(t.price) : "", "avviso a " + t.threshold].filter(Boolean).join(", ");
       return `<article class="tee">
@@ -218,7 +226,7 @@
             <input type="number" inputmode="numeric" min="0" value="${v}" data-set="${k}" aria-label="${esc(t.name)} taglia ${s}">
             <button data-b="${t.id}|${s}|1" aria-label="Aggiungi una ${s}">+</button></div>`;
         }).join("")}</div>
-        <div class="tee-actions"><button class="link" data-edit="${t.id}">Modifica</button><button class="link" data-del="${t.id}">Elimina</button></div>
+        ${editMode ? `<div class="tee-actions"><button class="link" data-edit="${t.id}">Modifica</button><button class="link" data-del="${t.id}">Elimina</button></div>` : ""}
       </article>`;
     }).join("");
     if (act) { const el = document.querySelector(`[data-set="${act}"]`); if (el) { el.focus(); } }
@@ -240,8 +248,8 @@
   $("#app").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
     if (b.dataset.b) { const [id, s, d] = b.dataset.b.split("|"); return bump(id, s, +d); }
-    if (b.dataset.edit) return openForm(tees.find((t) => t.id === b.dataset.edit));
-    if (b.dataset.del) {
+    if (b.dataset.edit && editMode) return openForm(tees.find((t) => t.id === b.dataset.edit));
+    if (b.dataset.del && editMode) {
       const t = tees.find((x) => x.id === b.dataset.del);
       if (confirm(`Eliminare "${t.name}" dal magazzino? Le quantità vengono cancellate.`))
         api.deleteTee(t.id).then(() => { toast("Design eliminato"); reload(); }).catch((er) => toast("Eliminazione non riuscita: " + er.message));
@@ -249,7 +257,7 @@
   });
   $("#app").addEventListener("change", (e) => { const k = e.target.dataset.set; if (k) { const [id, s] = k.split("|"); setExact(id, s, e.target.value); } });
   $("#app").addEventListener("focusin", (e) => { if (e.target.dataset.set) e.target.select(); });
-  $("#fab").addEventListener("click", () => openForm());
+  $("#fab").addEventListener("click", () => { if (editMode) openForm(); });
 
   /* ================= FORM ================= */
   function resizeImage(file) {
