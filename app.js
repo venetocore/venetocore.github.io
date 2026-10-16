@@ -275,7 +275,7 @@
     });
   }
 
-  const TABS = [["stock", "Magazzino"], ["sales", "Vendite"], ["orders", "Fornitore"], ["profit", "Guadagni"]];
+  const TABS = [["stock", "Magazzino"], ["sales", "Vendite"], ["orders", "Ristampe"], ["profit", "Guadagni"]];
   const ICONS = {
     stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
     sales: '<path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
@@ -284,7 +284,7 @@
   };
   function renderFab() {
     const f = $("#fab");
-    const label = tab === "stock" ? (editMode ? "Aggiungi design" : "") : tab === "sales" ? "Nuova vendita" : tab === "orders" ? "Nuovo ordine fornitore" : "";
+    const label = tab === "stock" ? (editMode ? "Aggiungi design" : "") : tab === "sales" ? "Nuova vendita" : tab === "orders" ? "Nuova ristampa" : "";
     f.hidden = !label; f.textContent = label;
   }
   function showTab(t) {
@@ -378,7 +378,7 @@
     }
   }
 
-  /* ================= VENDITE / FORNITORE / GUADAGNI ================= */
+  /* ================= VENDITE / RISTAMPE / GUADAGNI ================= */
   const PAYMENTS = ["Contanti", "Carta", "PayPal", "Satispay", "Bonifico", "Altro"];
   const num = (v) => Number(v) || 0;
   const priceOf = (t) => (t.price != null ? t.price : defs.price);
@@ -424,20 +424,20 @@
   function renderOrders() {
     const v = $("#v-orders"); if (!v) return;
     const waiting = orders.filter((o) => o.status !== "ricevuto").reduce((a, o) => a + orderPieces(o), 0);
-    v.innerHTML = `<section class="hero"><h1 class="g">Fornitore</h1></section>
-      <p class="hint">Registra qui cosa ordini al fornitore. Quando arriva la merce tocca «Arrivato»: i pezzi entrano in magazzino.</p>
+    v.innerHTML = `<section class="hero"><h1 class="g">Ristampe</h1></section>
+      <p class="hint">Registra qui le magliette che fai ristampare. Quando arrivano tocca «Arrivata»: i pezzi entrano in magazzino.</p>
       ${orders.length ? `<div class="sumline"><b>${waiting}</b> pezzi in arrivo</div>
       <ol class="recs">${orders.map((o) => {
         const got = o.status === "ricevuto", n = orderPieces(o);
         return `<li class="rec">
         <div class="rec-main"><b class="d with-mini">${mini(o.tee_id, "lg")}<span>${esc(o.tee_name || "Modello eliminato")}</span></b>
           <div>${esc(orderSizesText(o))} · ${n} pezzi</div>
-          <div class="meta">Ordinato il ${when(o.created_at)}${byWho(o)}${got && o.received_at ? " · arrivato il " + when(o.received_at) : ""}</div></div>
+          <div class="meta">Ordinata il ${when(o.created_at)}${byWho(o)}${got && o.received_at ? " · arrivata il " + when(o.received_at) : ""}</div></div>
         <div class="rec-side"><b class="amt">${eur(num(o.unit_cost) * n)}</b>
-          ${got ? `<span class="badge done">Arrivato</span>` : `<span class="badge">In arrivo</span><button class="btn small" data-ord-recv="${esc(o.id)}">Arrivato</button><button class="link" data-ord-del="${esc(o.id)}">Elimina</button>`}
+          ${got ? `<span class="badge done">Arrivata</span>` : `<span class="badge">In arrivo</span><button class="btn small" data-ord-recv="${esc(o.id)}">Arrivata</button><button class="link" data-ord-del="${esc(o.id)}">Elimina</button>`}
         </div>
       </li>`; }).join("")}</ol>`
-      : `<div class="empty"><span class="d">Nessun ordine</span>Tocca «Nuovo ordine fornitore» per registrare il primo.</div>`}`;
+      : `<div class="empty"><span class="d">Nessuna ristampa</span>Tocca «Nuova ristampa» per registrare la prima.</div>`}`;
   }
 
   function renderProfit() {
@@ -468,7 +468,7 @@
       </div>
       <div class="stats grid">
         ${cell(eur(rev), "venduto")}${cell(eur(cogs), "costo dei pezzi venduti")}${cell(eur(profit), "guadagno", profit < 0 ? "alert" : "good")}${cell(margin, "margine")}
-        ${cell(pcs, "pezzi venduti")}${cell(eur(due), "da incassare", due > 0 ? "warn" : "")}${cell(eur(spent), "speso dal fornitore")}${cell(eur(stockVal), "valore magazzino ora")}
+        ${cell(pcs, "pezzi venduti")}${cell(eur(due), "da incassare", due > 0 ? "warn" : "")}${cell(eur(spent), "speso in ristampe")}${cell(eur(stockVal), "valore magazzino ora")}
       </div>
       <p class="hint">Guadagno = venduto meno il costo dei pezzi venduti. Gli ordini annullati non contano. «Da incassare» sono gli ordini ancora nello stato Ordinato.</p>
       ${nocost ? `<p class="hint warn">Per ${nocost} righe vendute manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo standard con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
@@ -585,13 +585,13 @@
     if (!tees.length) { toast("Aggiungi prima un design nel Magazzino"); return; }
     const d = $("#dlg");
     d.innerHTML = `<form class="dlg" id="of">
-      <h3 class="g">Ordine al fornitore</h3>
+      <h3 class="g">Nuova ristampa</h3>
       <label class="field"><span>Modello</span><select name="tee">${tees.map((t) => `<option value="${esc(t.id)}">${teeLabel(t)}</option>`).join("")}</select></label>
       <div class="field"><span>Pezzi per taglia</span><div class="row">${SIZES.map((s) => `<label class="field"><span>${s}</span><input name="q_${s}" type="number" inputmode="numeric" min="0" step="1" placeholder="0"></label>`).join("")}</div></div>
       <label class="field"><span>Costo cad. dal fornitore €</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.01" required></label>
       <div class="total" id="stot"></div>
       <div class="err" id="ferr" role="alert"></div>
-      <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Salva ordine</button></div>
+      <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Salva ristampa</button></div>
     </form>`;
     const f = $("#of"), el = f.elements, teeOf = () => tees.find((t) => t.id === el.tee.value);
     const qtys = () => { const q = {}; SIZES.forEach((s) => { const n = parseInt(el["q_" + s].value, 10); if (n > 0) q[s] = n; }); return q; };
@@ -606,7 +606,7 @@
       if (!Object.keys(qty).length) { $("#ferr").textContent = "Metti almeno un pezzo in una taglia."; return; }
       if (!(cost >= 0)) { $("#ferr").textContent = "Inserisci il costo dal fornitore."; return; }
       $("#save").disabled = true; $("#ferr").textContent = "";
-      try { await api.saveOrder({ tee_id: t.id, tee_name: t.name, qty, unit_cost: cost }); d.close(); toast("Ordine salvato"); reload(); }
+      try { await api.saveOrder({ tee_id: t.id, tee_name: t.name, qty, unit_cost: cost }); d.close(); toast("Ristampa salvata"); reload(); }
       catch (er) { $("#ferr").textContent = "Non salvato: " + (er.message || "errore"); $("#save").disabled = false; }
     };
     d.showModal();
@@ -626,7 +626,7 @@
     }
     if (b.dataset.ordRecv) {
       const x = orders.find((r) => String(r.id) === b.dataset.ordRecv); if (!x) return;
-      if (confirm(`La merce è arrivata? Aggiungo ${orderPieces(x)} pezzi di "${x.tee_name}" al magazzino.`)) {
+      if (confirm(`La ristampa è arrivata? Aggiungo ${orderPieces(x)} pezzi di "${x.tee_name}" al magazzino.`)) {
         b.disabled = true;
         api.receiveOrder(b.dataset.ordRecv).then(() => { toast("Magazzino aggiornato"); reload(); }).catch((er) => { b.disabled = false; fail(er); });
       }
@@ -634,7 +634,7 @@
     }
     if (b.dataset.ordDel) {
       const x = orders.find((r) => String(r.id) === b.dataset.ordDel); if (!x) return;
-      if (confirm(`Eliminare l'ordine di "${x.tee_name}"?`)) api.deleteOrder(b.dataset.ordDel).then(() => { toast("Ordine eliminato"); reload(); }).catch(fail);
+      if (confirm(`Eliminare la ristampa di "${x.tee_name}"?`)) api.deleteOrder(b.dataset.ordDel).then(() => { toast("Ristampa eliminata"); reload(); }).catch(fail);
       return;
     }
     if (b.dataset.b) { const [id, s, d] = b.dataset.b.split("|"); return bump(id, s, +d); }
