@@ -31,6 +31,8 @@ img{display:block;max-width:100%}
 .stat span{font-size:13px;color:var(--mid)}
 .stat.alert{background:var(--fg);color:var(--bg)}
 .stat.alert span{color:inherit;opacity:.75}
+.summary{margin-top:40px;border-top:3px solid var(--fg);padding-top:12px}
+.summary h2{font-size:42px;margin:0 0 6px}
 
 /* toolbar */
 .bar{display:flex;gap:8px;align-items:center;margin:16px 0 4px;flex-wrap:wrap}

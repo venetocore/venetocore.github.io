@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+  const SIZES = ["S", "M", "L", "XL"];
   const COLORS = { nero: "nera", bianco: "bianca", grigio: "grigia", altro: "di altro colore" };
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -30,12 +30,18 @@
         tees: [
           { id: "t1", name: "Will never die", color: "nero", price: null, threshold: 3, image: "img/will-never-die.jpg", created_at: now - 3, stock: { S: 0, M: 0, L: 0, XL: 0 } },
           { id: "t2", name: "Nordest", color: "bianco", price: null, threshold: 3, image: "img/nordest.jpg", created_at: now - 2, stock: { S: 0, M: 0, L: 0, XL: 0 } },
-          { id: "t3", name: "I ♫ Veneto", color: "nero", price: null, threshold: 3, image: "img/i-nota-veneto.jpg", created_at: now - 1, stock: { M: 0, L: 0, XL: 0, XXL: 0 } }
+          { id: "t3", name: "I ♫ Veneto", color: "nero", price: null, threshold: 3, image: "img/i-nota-veneto.jpg", created_at: now - 1, stock: { S: 0, M: 0, L: 0, XL: 0 } }
         ], moves: []
       };
     },
     write(s) { try { localStorage.setItem(this.KEY, JSON.stringify(s)); } catch (e) { toast("Memoria del browser piena: usa foto più leggere"); } },
-    async load() { const s = this.read(); return { tees: s.tees, moves: s.moves.slice(0, 20) }; },
+    async load() {
+      const s = this.read();
+      return {
+        tees: s.tees.map((t) => ({ ...t, stock: Object.fromEntries(SIZES.map((size) => [size, t.stock[size] || 0])) })),
+        moves: s.moves.slice(0, 20)
+      };
+    },
     async change(id, size, fn) {
       const s = this.read(); const t = s.tees.find((x) => x.id === id); if (!t || !(size in t.stock)) throw new Error("Taglia non trovata");
       const old = t.stock[size], nv = Math.max(0, fn(old));
@@ -48,7 +54,7 @@
       const s = this.read(); let t = data.id && s.tees.find((x) => x.id === data.id);
       if (!t) { t = { id: "t" + Date.now(), created_at: Date.now(), stock: {} }; s.tees.push(t); }
       Object.assign(t, { name: data.name, color: data.color, price: data.price, threshold: data.threshold, image: data.image });
-      const st = {}; sizes.forEach((z) => (st[z] = t.stock[z] || 0)); t.stock = st;
+      const st = { ...t.stock }; SIZES.forEach((z) => (st[z] = t.stock[z] || 0)); t.stock = st;
       this.write(s);
     },
     async deleteTee(id) { const s = this.read(); s.tees = s.tees.filter((t) => t.id !== id); this.write(s); },
@@ -62,22 +68,33 @@
         sb.from("moves").select("id,created_at,tee_name,size,delta,by_email").order("created_at", { ascending: false }).limit(20)
       ]);
       if (a.error) throw a.error; if (b.error) throw b.error;
+      const missing = [];
+      a.data.forEach((t) => {
+        const existing = new Set((t.stock || []).map((r) => r.size));
+        SIZES.forEach((size) => { if (!existing.has(size)) missing.push({ tee_id: t.id, size, qty: 0 }); });
+      });
+      if (missing.length) {
+        const { error } = await sb.from("stock").upsert(missing, { onConflict: "tee_id,size", ignoreDuplicates: true });
+        if (error) throw error;
+      }
       return {
-        tees: a.data.map((t) => { const st = {}; (t.stock || []).forEach((r) => (st[r.size] = r.qty)); return { ...t, stock: st }; }),
+        tees: a.data.map((t) => {
+          const st = Object.fromEntries(SIZES.map((size) => [size, 0]));
+          (t.stock || []).forEach((r) => { if (SIZES.includes(r.size)) st[r.size] = r.qty; });
+          return { ...t, stock: st };
+        }),
         moves: b.data
       };
     },
     async adjust(id, size, d) { const { data, error } = await sb.rpc("adjust_stock", { p_tee: id, p_size: size, p_delta: d }); if (error) throw error; return data; },
     async set(id, size, q) { const { data, error } = await sb.rpc("set_stock", { p_tee: id, p_size: size, p_qty: q }); if (error) throw error; return data; },
-    async saveTee(data, sizes) {
+    async saveTee(data) {
       const row = { name: data.name, color: data.color, price: data.price, threshold: data.threshold, image: data.image };
       let id = data.id;
       if (id) { const { error } = await sb.from("tees").update(row).eq("id", id); if (error) throw error; }
       else { const { data: ins, error } = await sb.from("tees").insert(row).select("id").single(); if (error) throw error; id = ins.id; }
-      const { error: e1 } = await sb.from("stock").upsert(sizes.map((s) => ({ tee_id: id, size: s, qty: 0 })), { onConflict: "tee_id,size", ignoreDuplicates: true });
+      const { error: e1 } = await sb.from("stock").upsert(SIZES.map((size) => ({ tee_id: id, size, qty: 0 })), { onConflict: "tee_id,size", ignoreDuplicates: true });
       if (e1) throw e1;
-      const { error: e2 } = await sb.from("stock").delete().eq("tee_id", id).not("size", "in", "(" + sizes.map((s) => '"' + s + '"').join(",") + ")");
-      if (e2) throw e2;
     },
     async deleteTee(id) { const { error } = await sb.from("tees").delete().eq("id", id); if (error) throw error; },
     async upload(blob) {
@@ -173,7 +190,7 @@
       $("#logout").onclick = async () => { await sb.auth.signOut(); };
     }
     $("#app").innerHTML = `
-      <section class="hero"><h1 class="g">Magazzino</h1><div class="stats" id="stats"></div></section>
+      <section class="hero"><h1 class="g">Magazzino</h1></section>
       <div class="bar">
         <button class="chipbtn" id="lowBtn" aria-pressed="${onlyLow}">Da riordinare</button>
         <details class="menu">
@@ -187,7 +204,8 @@
         <button class="btn ghost" id="finishEdit">Fine</button>
       </div>
       <div id="list"></div>
-      <section class="log" id="logWrap" hidden><h2 class="g">Movimenti</h2><ol id="log"></ol></section>`;
+      <section class="log" id="logWrap" hidden><h2 class="g">Movimenti</h2><ol id="log"></ol></section>
+      <section class="summary" aria-label="Riepilogo complessivo"><h2 class="g">Riepilogo</h2><div class="stats" id="stats"></div></section>`;
     $("#lowBtn").addEventListener("click", (e) => { onlyLow = !onlyLow; e.currentTarget.setAttribute("aria-pressed", onlyLow); renderMain(); });
     $("#editToggle").addEventListener("click", () => { editMode = !editMode; renderShell(); renderMain(); });
     $("#finishEdit").addEventListener("click", () => { editMode = false; renderShell(); renderMain(); });
@@ -275,7 +293,6 @@
   }
   function openForm(t) {
     const d = $("#dlg"); let blob = null;
-    const on = t ? Object.keys(t.stock) : ["S", "M", "L", "XL"];
     d.innerHTML = `<form class="dlg" id="tf">
       <h3 class="g">${t ? "Modifica design" : "Nuovo design"}</h3>
       <div class="field"><span>Foto</span><div class="photo">
@@ -287,7 +304,7 @@
         <label class="field"><span>Prezzo €</span><input name="price" type="number" inputmode="decimal" min="0" step="0.5" value="${t && t.price != null ? t.price : ""}" placeholder="facoltativo"></label>
       </div>
       <label class="field"><span>Avvisami quando una taglia scende a</span><input name="threshold" type="number" inputmode="numeric" min="0" value="${t ? t.threshold : 3}"></label>
-      <div class="field"><span>Taglie</span><div class="chips">${SIZES.map((s) => `<label class="chip"><input type="checkbox" value="${s}" ${on.includes(s) ? "checked" : ""}>${s}</label>`).join("")}</div></div>
+      <div class="field"><span>Taglie disponibili</span><div class="chips">${SIZES.map((s) => `<span class="chip">${s}</span>`).join("")}</div></div>
       <div class="err" id="ferr" role="alert"></div>
       <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">${t ? "Salva modifiche" : "Salva design"}</button></div>
     </form>`;
@@ -299,14 +316,12 @@
     };
     $("#tf").onsubmit = async (e) => {
       e.preventDefault();
-      const f = e.target, sizes = [...f.querySelectorAll(".chips input:checked")].map((i) => i.value);
+      const f = e.target;
       if (!f.name.value.trim()) { $("#ferr").textContent = "Dai un nome al design."; return; }
-      if (!sizes.length) { $("#ferr").textContent = "Scegli almeno una taglia."; return; }
-      if (t && Object.keys(t.stock).some((s) => !sizes.includes(s) && t.stock[s] > 0) && !confirm("Stai togliendo una taglia che ha ancora pezzi. Continuare?")) return;
       $("#save").disabled = true; $("#ferr").textContent = "";
       try {
         const image = blob ? await api.upload(blob) : t ? t.image : null;
-        await api.saveTee({ id: t && t.id, name: f.name.value.trim(), color: f.color.value, price: f.price.value === "" ? null : Math.max(0, +f.price.value), threshold: Math.max(0, parseInt(f.threshold.value, 10) || 0), image }, sizes);
+        await api.saveTee({ id: t && t.id, name: f.name.value.trim(), color: f.color.value, price: f.price.value === "" ? null : Math.max(0, +f.price.value), threshold: Math.max(0, parseInt(f.threshold.value, 10) || 0), image });
         d.close(); toast(t ? "Modifiche salvate" : "Design aggiunto"); reload();
       } catch (er) { $("#ferr").textContent = "Salvataggio non riuscito: " + (er.message || "errore"); $("#save").disabled = false; }
     };

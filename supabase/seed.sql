@@ -14,4 +14,4 @@ with t as (insert into public.tees (name, color, image) values ('Nordest', 'bian
 insert into public.stock (tee_id, size) select id, s from t, unnest(array['S','M','L','XL']) s;
 
 with t as (insert into public.tees (name, color, image) values ('I ♫ Veneto', 'nero', 'img/i-nota-veneto.jpg') returning id)
-insert into public.stock (tee_id, size) select id, s from t, unnest(array['M','L','XL','XXL']) s;
+insert into public.stock (tee_id, size) select id, s from t, unnest(array['S','M','L','XL']) s;
