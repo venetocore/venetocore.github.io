@@ -29,14 +29,13 @@ Se avevi già eseguito `schema.sql` su Supabase, rieseguilo: aggiunge le nuove t
 ### 2. Supabase
 1. Crea un progetto su https://supabase.com (regione EU, ad esempio Frankfurt).
 2. SQL Editor → incolla `supabase/schema.sql` → Run.
-3. Authentication → Users → *Add user* / *Invite user* per ogni persona del team.
+3. Authentication → Users → *Add user* → *Create new user* per ogni persona del team: email, password e spunta *Auto Confirm User*. Un utente a testa, così i movimenti riportano chi li ha fatti.
 4. In `supabase/seed.sql` metti le stesse email, poi eseguilo nel SQL Editor.
 5. Authentication → Sign In / Providers → Email: disattiva *Allow new users to sign up*.
-6. Authentication → URL Configuration: *Site URL* = `https://venetocore.github.io` e aggiungilo anche ai *Redirect URLs*.
-7. Project Settings → API: copia *Project URL* e *anon public key* in `config.js` e fai commit.
+6. Project Settings → API: copia *Project URL* e *anon public key* in `config.js` e fai commit.
 
 ### Accesso
-Si entra con l'email: arriva un link, lo si apre sul telefono e si è dentro. Solo le email presenti nella tabella `team` vedono e modificano i dati.
+Si entra con email e password dell'utente creato in Supabase. Solo le email presenti nella tabella `team` vedono e modificano i dati. Le password si cambiano da Authentication → Users. Non scrivere le password nel repository, che è pubblico.
 
 ## Da sapere
 - La anon key è fatta per stare nel codice pubblico: la protezione la fanno le regole RLS. Non mettere mai la *service_role key* nel repository.

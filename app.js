@@ -224,23 +224,24 @@
     $("#fab").hidden = true; $("#tabs").hidden = true; $("#gear").hidden = true; $("#who").innerHTML = "";
     $("#app").innerHTML = `<section class="login">
       <h1 class="g">Magazzino</h1>
-      <p>Accesso riservato al team. Inserisci la tua email e ti mandiamo un link per entrare.</p>
+      <p>Accesso riservato al team. Entra con la tua email e la password.</p>
       <form id="loginForm">
-        <label class="field"><span>Email</span><input name="email" type="email" required autocomplete="email" inputmode="email"></label>
+        <label class="field"><span>Email</span><input name="email" type="email" required autocomplete="username" inputmode="email"></label>
+        <label class="field"><span>Password</span><input name="password" type="password" required autocomplete="current-password"></label>
         <div class="err" id="loginMsg" role="alert">${esc(msg || "")}</div>
-        <button class="btn" style="width:100%">Mandami il link di accesso</button>
+        <button class="btn" style="width:100%">Entra</button>
       </form></section>`;
     $("#loginForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const email = e.target.email.value.trim().toLowerCase(), btn = e.target.querySelector("button");
       btn.disabled = true; $("#loginMsg").textContent = "";
-      const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: location.origin + location.pathname } });
+      const { error } = await sb.auth.signInWithPassword({ email, password: e.target.password.value });
       btn.disabled = false;
-      const code = error && (error.code || "");
-      $("#loginMsg").textContent = !error ? "Link inviato: apri la mail da questo dispositivo."
-        : code === "otp_disabled" || code === "user_not_found" ? "Questa email non è abilitata. Chiedi a chi gestisce il magazzino di aggiungerti."
+      if (!error) return; // onAuthStateChange apre l'app
+      const code = error.code || "";
+      $("#loginMsg").textContent = code === "invalid_credentials" || error.status === 400 ? "Email o password non corrette."
         : error.status === 429 || /rate.?limit/i.test(code) ? "Troppi tentativi: aspetta qualche minuto e riprova."
-        : "Non sono riuscito a mandare il link (" + (error.message || "errore") + "). Riprova tra poco.";
+        : "Non sono riuscito a entrare (" + (error.message || "errore") + "). Riprova tra poco.";
     });
   }
 
