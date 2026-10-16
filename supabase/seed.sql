@@ -2,8 +2,8 @@
 -- 1. Metti le email del team (in minuscolo). Devono essere le stesse degli utenti
 --    creati in Authentication > Users.
 insert into public.team (email) values
-  ('tua.email@example.com'),
-  ('amico1@example.com')
+  ('roccoarreghini@gmail.com'),
+  ('elisabetta.chisso@gmail.com')
 on conflict do nothing;
 
 -- 2. I tre design di partenza, con tutte le taglie a zero
