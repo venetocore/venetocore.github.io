@@ -12,6 +12,7 @@ create table if not exists public.tees (
   name text not null,
   color text not null default 'nero',
   price numeric(8,2),
+  cost numeric(8,2),
   threshold int not null default 3 check (threshold >= 0),
   image text,
   created_at timestamptz not null default now()
@@ -35,12 +36,15 @@ create table if not exists public.moves (
 );
 
 -- 2b. Vendite ai clienti e ordini al fornitore
--- Prezzo di vendita e costo dal fornitore per tipo di maglietta (colore)
-create table if not exists public.tee_types (
-  color text primary key,
+alter table public.tees add column if not exists cost numeric(8,2);
+
+-- Prezzo di vendita e costo dal fornitore standard (un modello può averne di suoi in tees.price e tees.cost)
+create table if not exists public.settings (
+  id int primary key default 1 check (id = 1),
   price numeric(8,2) check (price >= 0),
   cost numeric(8,2) check (cost >= 0)
 );
+insert into public.settings (id, price, cost) values (1, 20, 7.5) on conflict (id) do nothing;
 
 create table if not exists public.sales (
   id bigint generated always as identity primary key,
@@ -79,7 +83,7 @@ alter table public.tees  enable row level security;
 alter table public.stock enable row level security;
 alter table public.moves enable row level security;
 alter table public.sales enable row level security;
-alter table public.tee_types enable row level security;
+alter table public.settings enable row level security;
 alter table public.supplier_orders enable row level security;
 
 drop policy if exists team_read on public.team;
@@ -91,8 +95,8 @@ create policy tees_all on public.tees for all to authenticated using (public.is_
 drop policy if exists stock_all on public.stock;
 create policy stock_all on public.stock for all to authenticated using (public.is_team()) with check (public.is_team());
 
-drop policy if exists tee_types_all on public.tee_types;
-create policy tee_types_all on public.tee_types for all to authenticated using (public.is_team()) with check (public.is_team());
+drop policy if exists settings_all on public.settings;
+create policy settings_all on public.settings for all to authenticated using (public.is_team()) with check (public.is_team());
 
 drop policy if exists sales_all on public.sales;
 create policy sales_all on public.sales for all to authenticated using (public.is_team()) with check (public.is_team());
@@ -145,7 +149,7 @@ begin
   if p_qty is null or p_qty < 1 then raise exception 'Quantità non valida'; end if;
   select * into v_tee from public.tees where id = p_tee;
   if not found then raise exception 'Design non trovato'; end if;
-  select cost into v_cost from public.tee_types where color = v_tee.color;
+  v_cost := coalesce(v_tee.cost, (select cost from public.settings where id = 1));
   select qty into v_have from public.stock where tee_id = p_tee and size = p_size for update;
   if not found then raise exception 'Taglia non trovata'; end if;
   if v_have < p_qty then raise exception 'Scorta insufficiente: in magazzino ne restano %', v_have; end if;
@@ -195,7 +199,7 @@ grant execute on function public.receive_order(bigint) to authenticated;
 
 -- 5. Aggiornamenti in tempo reale tra telefoni
 do $$ declare t text; begin
-  foreach t in array array['tees','stock','moves','sales','supplier_orders','tee_types'] loop
+  foreach t in array array['tees','stock','moves','sales','supplier_orders','settings'] loop
     begin execute format('alter publication supabase_realtime add table public.%I', t);
     exception when duplicate_object then null; end;
   end loop;

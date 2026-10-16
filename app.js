@@ -13,7 +13,7 @@
   let tees = [];      // {id,name,color,price,threshold,image,created_at,stock:{S:3}}
   let moves = [];     // {id,created_at,tee_name,size,delta,by_email}
   let session = null;
-  let sales = [], orders = [], types = {}, tab = "stock", period = "all";
+  let sales = [], orders = [], defs = { price: null, cost: null }, tab = "stock", period = "all";
   let editMode = false, onlyLow = false;
   const pending = {}; // "teeId|size" -> delta not yet saved
   const timers = {};
@@ -25,14 +25,14 @@
   const local = {
     KEY: "vc-magazzino-local-v1",
     read() {
-      try { const s = JSON.parse(localStorage.getItem(this.KEY)); if (s && s.tees) return Object.assign({ moves: [], sales: [], orders: [], types: {} }, s); } catch (e) {}
+      try { const s = JSON.parse(localStorage.getItem(this.KEY)); if (s && s.tees) return Object.assign({ moves: [], sales: [], orders: [], defs: { price: 20, cost: 7.5 } }, s); } catch (e) {}
       const now = Date.now();
       return {
         tees: [
           { id: "t1", name: "Will never die", color: "nero", threshold: 3, image: "img/will-never-die.jpg", created_at: now - 3, stock: { S: 0, M: 0, L: 0, XL: 0 } },
           { id: "t2", name: "Nordest", color: "bianco", threshold: 3, image: "img/nordest.jpg", created_at: now - 2, stock: { S: 0, M: 0, L: 0, XL: 0 } },
           { id: "t3", name: "I ♫ Veneto", color: "nero", threshold: 3, image: "img/i-nota-veneto.jpg", created_at: now - 1, stock: { S: 0, M: 0, L: 0, XL: 0 } }
-        ], moves: []
+        ], moves: [], sales: [], orders: [], defs: { price: 20, cost: 7.5 }
       };
     },
     write(s) { try { localStorage.setItem(this.KEY, JSON.stringify(s)); } catch (e) { toast("Memoria del browser piena: usa foto più leggere"); } },
@@ -40,7 +40,7 @@
       const s = this.read();
       return {
         tees: s.tees.map((t) => ({ ...t, stock: Object.fromEntries(SIZES.map((size) => [size, t.stock[size] || 0])) })),
-        moves: s.moves.slice(0, 20), sales: s.sales, orders: s.orders, types: s.types
+        moves: s.moves.slice(0, 20), sales: s.sales, orders: s.orders, defs: s.defs
       };
     },
     async change(id, size, fn) {
@@ -54,11 +54,11 @@
     async saveTee(data, sizes) {
       const s = this.read(); let t = data.id && s.tees.find((x) => x.id === data.id);
       if (!t) { t = { id: "t" + Date.now(), created_at: Date.now(), stock: {} }; s.tees.push(t); }
-      Object.assign(t, { name: data.name, color: data.color, threshold: data.threshold, image: data.image });
+      Object.assign(t, { name: data.name, color: data.color, price: data.price, cost: data.cost, threshold: data.threshold, image: data.image });
       const st = { ...t.stock }; SIZES.forEach((z) => (st[z] = t.stock[z] || 0)); t.stock = st;
       this.write(s);
     },
-    async saveTypes(m) { const s = this.read(); s.types = m; this.write(s); },
+    async saveDefs(m) { const s = this.read(); s.defs = m; this.write(s); },
     async createSale(d) {
       const s = this.read(), t = s.tees.find((x) => x.id === d.tee_id); if (!t) throw new Error("Design non trovato");
       const have = t.stock[d.size] || 0;
@@ -67,7 +67,7 @@
       const now = Date.now();
       s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: d.size, delta: -d.qty, by_email: "" });
       s.moves = s.moves.slice(0, 50);
-      s.sales.unshift({ id: now + Math.random(), created_at: now, tee_id: t.id, tee_name: t.name, size: d.size, qty: d.qty, customer: d.customer, payment: d.payment, unit_price: d.price, unit_cost: ((s.types || {})[t.color] || {}).cost == null ? null : s.types[t.color].cost, by_email: "" });
+      s.sales.unshift({ id: now + Math.random(), created_at: now, tee_id: t.id, tee_name: t.name, size: d.size, qty: d.qty, customer: d.customer, payment: d.payment, unit_price: d.price, unit_cost: t.cost != null ? t.cost : s.defs.cost, by_email: "" });
       this.write(s);
     },
     async deleteSale(id) {
@@ -113,7 +113,7 @@
         sb.from("moves").select("id,created_at,tee_name,size,delta,by_email").order("created_at", { ascending: false }).limit(20),
         sb.from("sales").select("id,created_at,tee_id,tee_name,size,qty,customer,payment,unit_price,unit_cost,by_email").order("created_at", { ascending: false }).limit(2000),
         sb.from("supplier_orders").select("id,created_at,tee_id,tee_name,qty,unit_cost,status,received_at,by_email").order("created_at", { ascending: false }).limit(1000),
-        sb.from("tee_types").select("color,price,cost")
+        sb.from("settings").select("price,cost")
       ]);
       if (a.error) throw a.error; if (b.error) throw b.error; if (c.error) throw c.error; if (d.error) throw d.error; if (e.error) throw e.error;
       const missing = [];
@@ -131,20 +131,20 @@
           (t.stock || []).forEach((r) => { if (SIZES.includes(r.size)) st[r.size] = r.qty; });
           return { ...t, stock: st };
         }),
-        moves: b.data, sales: c.data, orders: d.data, types: Object.fromEntries(e.data.map((r) => [r.color, { price: r.price, cost: r.cost }]))
+        moves: b.data, sales: c.data, orders: d.data, defs: e.data[0] || { price: null, cost: null }
       };
     },
     async adjust(id, size, d) { const { data, error } = await sb.rpc("adjust_stock", { p_tee: id, p_size: size, p_delta: d }); if (error) throw error; return data; },
     async set(id, size, q) { const { data, error } = await sb.rpc("set_stock", { p_tee: id, p_size: size, p_qty: q }); if (error) throw error; return data; },
     async saveTee(data) {
-      const row = { name: data.name, color: data.color, threshold: data.threshold, image: data.image };
+      const row = { name: data.name, color: data.color, price: data.price, cost: data.cost, threshold: data.threshold, image: data.image };
       let id = data.id;
       if (id) { const { error } = await sb.from("tees").update(row).eq("id", id); if (error) throw error; }
       else { const { data: ins, error } = await sb.from("tees").insert(row).select("id").single(); if (error) throw error; id = ins.id; }
       const { error: e1 } = await sb.from("stock").upsert(SIZES.map((size) => ({ tee_id: id, size, qty: 0 })), { onConflict: "tee_id,size", ignoreDuplicates: true });
       if (e1) throw e1;
     },
-    async saveTypes(m) { const rows = Object.keys(m).map((c) => ({ color: c, price: m[c].price, cost: m[c].cost })); const { error } = await sb.from("tee_types").upsert(rows, { onConflict: "color" }); if (error) throw error; },
+    async saveDefs(m) { const { error } = await sb.from("settings").upsert({ id: 1, price: m.price, cost: m.cost }); if (error) throw error; },
     async createSale(d) { const { error } = await sb.rpc("create_sale", { p_tee: d.tee_id, p_size: d.size, p_qty: d.qty, p_customer: d.customer, p_payment: d.payment, p_price: d.price }); if (error) throw error; },
     async deleteSale(id) { const { error } = await sb.rpc("delete_sale", { p_id: id }); if (error) throw error; },
     async saveOrder(d) { const { error } = await sb.from("supplier_orders").insert({ tee_id: d.tee_id, tee_name: d.tee_name, qty: d.qty, unit_cost: d.unit_cost }); if (error) throw error; },
@@ -165,7 +165,7 @@
   async function reload() {
     if (loading) { again = true; return; }
     loading = true;
-    try { const r = await api.load(); tees = r.tees; moves = r.moves; sales = r.sales || []; orders = r.orders || []; types = r.types || {}; renderMain(); setSync(LIVE ? "Aggiornato alle " + new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : "Modalità prova: dati solo su questo dispositivo"); }
+    try { const r = await api.load(); tees = r.tees; moves = r.moves; sales = r.sales || []; orders = r.orders || []; defs = r.defs || { price: null, cost: null }; renderMain(); setSync(LIVE ? "Aggiornato alle " + new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }) : "Modalità prova: dati solo su questo dispositivo"); }
     catch (e) { setSync("Non riesco a caricare i dati. Controlla la connessione e riprova."); console.error(e); }
     loading = false;
     if (again) { again = false; reload(); }
@@ -180,7 +180,7 @@
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "moves" }, ping)
       .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, ping)
       .on("postgres_changes", { event: "*", schema: "public", table: "supplier_orders" }, ping)
-      .on("postgres_changes", { event: "*", schema: "public", table: "tee_types" }, ping)
+      .on("postgres_changes", { event: "*", schema: "public", table: "settings" }, ping)
       .subscribe();
   }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && (!LIVE || session)) reload(); });
@@ -344,8 +344,8 @@
   /* ================= VENDITE / FORNITORE / GUADAGNI ================= */
   const PAYMENTS = ["Contanti", "Carta", "PayPal", "Satispay", "Bonifico", "Altro"];
   const num = (v) => Number(v) || 0;
-  const priceOf = (t) => (types[t.color] || {}).price;
-  const costOf = (t) => (types[t.color] || {}).cost;
+  const priceOf = (t) => (t.price != null ? t.price : defs.price);
+  const costOf = (t) => (t.cost != null ? t.cost : defs.cost);
   const when = (v) => { const d = new Date(v); return d.toLocaleDateString("it-IT", { day: "2-digit", month: "2-digit", year: "2-digit" }) + " " + d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" }); };
   const orderPieces = (o) => Object.values(o.qty || {}).reduce((a, n) => a + num(n), 0);
   const orderSizesText = (o) => SIZES.filter((s) => num((o.qty || {})[s]) > 0).map((s) => s + " × " + o.qty[s]).join(", ");
@@ -413,37 +413,33 @@
         ${cell(pcs, "pezzi venduti")}${cell(eur(spent), "speso dal fornitore")}${cell(eur(rev - spent), "incassato meno speso")}${cell(eur(stockVal), "valore magazzino ora")}
       </div>
       <p class="hint">Guadagno = incassato meno il costo dei soli pezzi venduti. «Incassato meno speso» conta invece tutto ciò che hai pagato al fornitore, anche la merce ancora in magazzino.</p>
-      ${nocost ? `<p class="hint warn">Per ${nocost} vendite manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo dei tipi di maglietta con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
+      ${nocost ? `<p class="hint warn">Per ${nocost} vendite manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo standard con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
       ${S.length ? `<section class="log"><h2 class="g">Per modello</h2><ol class="rows">${rows(byTee, { sort: (x) => x.r - x.c, text: (x) => `${x.q} pz · <b>${eur(x.r - x.c)}</b>` })}</ol></section>
       <section class="log"><h2 class="g">Per pagamento</h2><ol class="rows">${rows(byPay, { sort: (x) => x, text: (x) => `<b>${eur(x)}</b>` })}</ol></section>` : `<div class="empty"><span class="d">Ancora niente</span>I guadagni compaiono dopo la prima vendita.</div>`}`;
   }
 
   function openSettings() {
-    const d = $("#dlg"), cols = Object.keys(COLORS);
-    const val = (c, k) => { const x = (types[c] || {})[k]; return x != null ? x : ""; };
+    const d = $("#dlg");
+    const val = (k) => (defs[k] != null ? defs[k] : "");
     d.innerHTML = `<form class="dlg" id="st">
       <h3 class="g">Impostazioni</h3>
-      <p class="hint" style="margin:0 0 14px">Prezzo di vendita e costo dal fornitore per tipo di maglietta. Valgono per tutti i design di quel tipo e vengono proposti in automatico in vendite e ordini.</p>
-      ${cols.map((c) => `<fieldset class="type"><legend>Maglietta ${esc(COLORS[c])}</legend><div class="row">
-        <label class="field"><span>Vendita €</span><input name="p_${c}" type="number" inputmode="decimal" min="0" step="0.5" value="${val(c, "price")}"></label>
-        <label class="field"><span>Costo fornitore €</span><input name="c_${c}" type="number" inputmode="decimal" min="0" step="0.01" value="${val(c, "cost")}"></label>
-      </div></fieldset>`).join("")}
+      <p class="hint" style="margin:0 0 14px">Prezzo di vendita e costo dal fornitore standard. Valgono per tutti i modelli e vengono proposti in vendite e ordini. Se un modello ha un prezzo diverso, lo imposti dalla modalità Modifica.</p>
+      <div class="row">
+        <label class="field"><span>Prezzo di vendita €</span><input name="price" type="number" inputmode="decimal" min="0" step="0.5" value="${val("price")}"></label>
+        <label class="field"><span>Costo fornitore €</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.01" value="${val("cost")}"></label>
+      </div>
       <div class="err" id="ferr" role="alert"></div>
-      <button type="button" class="btn ghost" id="toEdit" style="width:100%;margin-bottom:12px">${editMode ? "Esci da modalità Modifica" : "Modifica quantità e design"}</button>
-      <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Salva prezzi</button></div>
+      <button type="button" class="btn ghost" id="toEdit" style="width:100%;margin-bottom:12px">${editMode ? "Esci da modalità Modifica" : "Modifica quantità e modelli"}</button>
+      <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Salva</button></div>
     </form>`;
     const f = $("#st"), el = f.elements;
     const read = () => {
-      const m = {};
-      for (const c of cols) {
-        const one = (n) => { const raw = el[n + "_" + c].value.trim(); if (raw === "") return null; const x = parseFloat(raw); if (isNaN(x) || x < 0) throw new Error("Controlla i numeri: devono essere zero o più."); return x; };
-        m[c] = { price: one("p"), cost: one("c") };
-      }
-      return m;
+      const one = (n) => { const raw = el[n].value.trim(); if (raw === "") return null; const x = parseFloat(raw.replace(",", ".")); if (isNaN(x) || x < 0) throw new Error("Controlla i numeri: devono essere zero o più."); return x; };
+      return { price: one("price"), cost: one("cost") };
     };
     const saveAll = async () => {
       $("#ferr").textContent = "";
-      try { const m = read(); await api.saveTypes(m); types = m; return true; }
+      try { const m = read(); await api.saveDefs(m); defs = m; return true; }
       catch (er) { $("#ferr").textContent = "Non salvato: " + (er.message || "errore"); return false; }
     };
     $("#cancel").onclick = () => d.close();
@@ -596,6 +592,11 @@
         <input type="file" accept="image/*" id="file" aria-label="Scegli una foto"></div></div>
       <label class="field"><span>Nome del design</span><input name="name" required maxlength="60" value="${esc(t ? t.name : "")}"></label>
       <label class="field"><span>Colore maglietta</span><select name="color">${Object.keys(COLORS).map((c) => `<option value="${c}" ${t && t.color === c ? "selected" : ""}>${c[0].toUpperCase() + c.slice(1)}</option>`).join("")}</select></label>
+      <div class="row">
+        <label class="field"><span>Prezzo di vendita €</span><input name="price" type="number" inputmode="decimal" min="0" step="0.5" value="${t && t.price != null ? t.price : ""}" placeholder="standard ${defs.price != null ? defs.price : ""}"></label>
+        <label class="field"><span>Costo fornitore €</span><input name="cost" type="number" inputmode="decimal" min="0" step="0.01" value="${t && t.cost != null ? t.cost : ""}" placeholder="standard ${defs.cost != null ? defs.cost : ""}"></label>
+      </div>
+      <p class="hint" style="margin:-6px 0 14px">Lascia vuoto per usare il prezzo e il costo standard delle Impostazioni.</p>
       <label class="field"><span>Avvisami quando una taglia scende a</span><input name="threshold" type="number" inputmode="numeric" min="0" value="${t ? t.threshold : 3}"></label>
       <div class="field"><span>Taglie disponibili</span><div class="chips">${SIZES.map((s) => `<span class="chip">${s}</span>`).join("")}</div></div>
       <div class="err" id="ferr" role="alert"></div>
@@ -614,7 +615,7 @@
       $("#save").disabled = true; $("#ferr").textContent = "";
       try {
         const image = blob ? await api.upload(blob) : t ? t.image : null;
-        await api.saveTee({ id: t && t.id, name: f.name.value.trim(), color: f.color.value, threshold: Math.max(0, parseInt(f.threshold.value, 10) || 0), image });
+        await api.saveTee({ id: t && t.id, name: f.name.value.trim(), color: f.color.value, price: f.price.value === "" ? null : Math.max(0, +f.price.value), cost: f.cost.value === "" ? null : Math.max(0, +f.cost.value), threshold: Math.max(0, parseInt(f.threshold.value, 10) || 0), image });
         d.close(); toast(t ? "Modifiche salvate" : "Design aggiunto"); reload();
       } catch (er) { $("#ferr").textContent = "Salvataggio non riuscito: " + (er.message || "errore"); $("#save").disabled = false; }
     };
