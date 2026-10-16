@@ -13,7 +13,7 @@
   let tees = [];      // {id,name,color,price,threshold,image,created_at,stock:{S:3}}
   let moves = [];     // {id,created_at,tee_name,size,delta,by_email}
   let session = null;
-  let sales = [], orders = [], defs = { price: null, cost: null }, tab = "stock", period = "all";
+  let sales = [], orders = [], defs = { price: null, cost: null }, tab = "stock", period = "all", salesFilter = "all";
   let editMode = false, onlyLow = false;
   const pending = {}; // "teeId|size" -> delta not yet saved
   const timers = {};
@@ -25,7 +25,7 @@
   const local = {
     KEY: "vc-magazzino-local-v1",
     read() {
-      try { const s = JSON.parse(localStorage.getItem(this.KEY)); if (s && s.tees) return Object.assign({ moves: [], sales: [], orders: [], defs: { price: 20, cost: 7.5 } }, s); } catch (e) {}
+      try { const s = JSON.parse(localStorage.getItem(this.KEY)); if (s && s.tees) { const st = Object.assign({ moves: [], sales: [], orders: [], defs: { price: 20, cost: 7.5 } }, s); st.sales = st.sales.map((x) => (x.items ? x : { id: x.id, created_at: x.created_at, customer: x.customer, payment: x.payment, status: "consegnato", note: "", by_email: x.by_email || "", items: [{ id: x.id, tee_id: x.tee_id, tee_name: x.tee_name, size: x.size, qty: x.qty, unit_price: x.unit_price, unit_cost: x.unit_cost }] })); return st; } } catch (e) {}
       const now = Date.now();
       return {
         tees: [
@@ -60,26 +60,53 @@
     },
     async saveDefs(m) { const s = this.read(); s.defs = m; this.write(s); },
     async createSale(d) {
-      const s = this.read(), t = s.tees.find((x) => x.id === d.tee_id); if (!t) throw new Error("Design non trovato");
-      const have = t.stock[d.size] || 0;
-      if (have < d.qty) throw new Error("Scorta insufficiente: in magazzino ne restano " + have);
-      t.stock[d.size] = have - d.qty;
-      const now = Date.now();
-      s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: d.size, delta: -d.qty, by_email: "" });
+      const s = this.read(), now = Date.now();
+      const need = {};
+      d.items.forEach((it) => {
+        const t = s.tees.find((x) => x.id === it.tee_id); if (!t) throw new Error("Modello non trovato");
+        const k = t.id + "|" + it.size; need[k] = (need[k] || 0) + it.qty;
+      });
+      for (const k in need) {
+        const [id, z] = k.split("|"), t = s.tees.find((x) => x.id === id), have = t.stock[z] || 0;
+        if (have < need[k]) throw new Error(`Scorta insufficiente per ${t.name} ${z}: ne restano ${have}`);
+      }
+      const rows = d.items.map((it) => {
+        const t = s.tees.find((x) => x.id === it.tee_id);
+        t.stock[it.size] -= it.qty;
+        s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: it.size, delta: -it.qty, by_email: "" });
+        const c = t.cost != null ? t.cost : s.defs.cost;
+        return { id: now + Math.random(), tee_id: t.id, tee_name: t.name, size: it.size, qty: it.qty, unit_price: it.price, unit_cost: c == null ? null : c };
+      });
       s.moves = s.moves.slice(0, 50);
-      s.sales.unshift({ id: now + Math.random(), created_at: now, tee_id: t.id, tee_name: t.name, size: d.size, qty: d.qty, customer: d.customer, payment: d.payment, unit_price: d.price, unit_cost: t.cost != null ? t.cost : s.defs.cost, by_email: "" });
+      s.sales.unshift({ id: now + Math.random(), created_at: now, customer: d.customer, payment: d.payment, status: d.status, note: d.note || "", by_email: "", items: rows });
       this.write(s);
     },
-    async deleteSale(id) {
-      const s = this.read(), x = s.sales.find((r) => String(r.id) === String(id)); if (!x) return;
-      const t = s.tees.find((y) => y.id === x.tee_id);
-      if (t && x.size in t.stock) {
-        t.stock[x.size] += x.qty;
-        s.moves.unshift({ id: Date.now() + Math.random(), created_at: Date.now(), tee_name: t.name, size: x.size, delta: x.qty, by_email: "" });
-        s.moves = s.moves.slice(0, 50);
+    // sign +1 rimette in magazzino i pezzi di un ordine, -1 li ritoglie
+    _orderStock(s, o, sign) {
+      if (sign < 0) {
+        for (const it of o.items) {
+          const t = s.tees.find((y) => y.id === it.tee_id);
+          if (t && (t.stock[it.size] || 0) < it.qty) throw new Error(`Scorta insufficiente per ${t.name} ${it.size}: ne restano ${t.stock[it.size] || 0}`);
+        }
       }
-      s.sales = s.sales.filter((r) => r !== x);
-      this.write(s);
+      const now = Date.now();
+      o.items.forEach((it) => {
+        const t = s.tees.find((y) => y.id === it.tee_id); if (!t || !(it.size in t.stock)) return;
+        t.stock[it.size] += sign * it.qty;
+        s.moves.unshift({ id: now + Math.random(), created_at: now, tee_name: t.name, size: it.size, delta: sign * it.qty, by_email: "" });
+      });
+      s.moves = s.moves.slice(0, 50);
+    },
+    async setSaleStatus(id, st) {
+      const s = this.read(), o = s.sales.find((r) => String(r.id) === String(id)); if (!o || o.status === st) return;
+      if (st === "annullato") this._orderStock(s, o, 1);
+      else if (o.status === "annullato") this._orderStock(s, o, -1);
+      o.status = st; this.write(s);
+    },
+    async deleteSale(id) {
+      const s = this.read(), o = s.sales.find((r) => String(r.id) === String(id)); if (!o) return;
+      if (o.status !== "annullato") this._orderStock(s, o, 1);
+      s.sales = s.sales.filter((r) => r !== o); this.write(s);
     },
     async saveOrder(d) {
       const s = this.read(), now = Date.now();
@@ -111,7 +138,7 @@
 
         sb.from("tees").select("id,name,color,price,cost,threshold,image,created_at,stock(size,qty)").order("created_at"),
         sb.from("moves").select("id,created_at,tee_name,size,delta,by_email").order("created_at", { ascending: false }).limit(20),
-        sb.from("sales").select("id,created_at,tee_id,tee_name,size,qty,customer,payment,unit_price,unit_cost,by_email").order("created_at", { ascending: false }).limit(2000),
+        sb.from("customer_orders").select("id,created_at,customer,payment,status,note,by_email,items:customer_order_items(id,tee_id,tee_name,size,qty,unit_price,unit_cost)").order("created_at", { ascending: false }).limit(1000),
         sb.from("supplier_orders").select("id,created_at,tee_id,tee_name,qty,unit_cost,status,received_at,by_email").order("created_at", { ascending: false }).limit(1000),
         sb.from("settings").select("price,cost")
       ]);
@@ -145,8 +172,9 @@
       if (e1) throw e1;
     },
     async saveDefs(m) { const { error } = await sb.from("settings").upsert({ id: 1, price: m.price, cost: m.cost }); if (error) throw error; },
-    async createSale(d) { const { error } = await sb.rpc("create_sale", { p_tee: d.tee_id, p_size: d.size, p_qty: d.qty, p_customer: d.customer, p_payment: d.payment, p_price: d.price }); if (error) throw error; },
-    async deleteSale(id) { const { error } = await sb.rpc("delete_sale", { p_id: id }); if (error) throw error; },
+    async createSale(d) { const { error } = await sb.rpc("create_customer_order", { p_customer: d.customer, p_payment: d.payment, p_status: d.status, p_note: d.note || "", p_items: d.items.map((it) => ({ tee_id: it.tee_id, size: it.size, qty: it.qty, price: it.price })) }); if (error) throw error; },
+    async setSaleStatus(id, st) { const { error } = await sb.rpc("set_customer_order_status", { p_id: id, p_status: st }); if (error) throw error; },
+    async deleteSale(id) { const { error } = await sb.rpc("delete_customer_order", { p_id: id }); if (error) throw error; },
     async saveOrder(d) { const { error } = await sb.from("supplier_orders").insert({ tee_id: d.tee_id, tee_name: d.tee_name, qty: d.qty, unit_cost: d.unit_cost }); if (error) throw error; },
     async receiveOrder(id) { const { error } = await sb.rpc("receive_order", { p_id: id }); if (error) throw error; },
     async deleteOrder(id) { const { error } = await sb.from("supplier_orders").delete().eq("id", id); if (error) throw error; },
@@ -178,7 +206,8 @@
       .on("postgres_changes", { event: "*", schema: "public", table: "stock" }, ping)
       .on("postgres_changes", { event: "*", schema: "public", table: "tees" }, ping)
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "moves" }, ping)
-      .on("postgres_changes", { event: "*", schema: "public", table: "sales" }, ping)
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_orders" }, ping)
+      .on("postgres_changes", { event: "*", schema: "public", table: "customer_order_items" }, ping)
       .on("postgres_changes", { event: "*", schema: "public", table: "supplier_orders" }, ping)
       .on("postgres_changes", { event: "*", schema: "public", table: "settings" }, ping)
       .subscribe();
@@ -246,6 +275,12 @@
   }
 
   const TABS = [["stock", "Magazzino"], ["sales", "Vendite"], ["orders", "Fornitore"], ["profit", "Guadagni"]];
+  const ICONS = {
+    stock: '<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',
+    sales: '<path d="M6 7h12l-1 13H7L6 7z"/><path d="M9 7a3 3 0 0 1 6 0"/>',
+    orders: '<path d="M3 6h11v10H3z"/><path d="M14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+    profit: '<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>'
+  };
   function renderFab() {
     const f = $("#fab");
     const label = tab === "stock" ? (editMode ? "Aggiungi design" : "") : tab === "sales" ? "Nuova vendita" : tab === "orders" ? "Nuovo ordine fornitore" : "";
@@ -261,7 +296,7 @@
   function renderShell() {
     const nav = $("#tabs");
     nav.hidden = false;
-    nav.innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}">${l}</button>`).join("");
+    nav.innerHTML = TABS.map(([k, l]) => `<button data-tab="${k}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg><span>${l}</span></button>`).join("");
     nav.onclick = (e) => { const b = e.target.closest("button"); if (b) { showTab(b.dataset.tab); window.scrollTo(0, 0); } };
     if (LIVE && session) {
       $("#who").innerHTML = `<span>${esc(session.user.email)}</span><button class="link" id="logout">Esci</button>`;
@@ -271,9 +306,6 @@
       <p class="sync" id="sync"></p>
       <div id="v-stock">
         <section class="hero"><h1 class="g">Magazzino</h1></section>
-        <div class="bar">
-          <button class="chipbtn" id="lowBtn" aria-pressed="${onlyLow}">Da riordinare</button>
-        </div>
         <div class="edit-notice" id="editNotice" ${editMode ? "" : "hidden"}>
           <span><strong>Modalità Modifica attiva</strong><br>Qui correggi le quantità a mano e aggiungi, modifichi o elimini i design. Per vendite e merce arrivata usa le altre schede.</span>
           <button class="btn ghost" id="finishEdit">Fine</button>
@@ -285,7 +317,6 @@
       <div id="v-sales" hidden></div>
       <div id="v-orders" hidden></div>
       <div id="v-profit" hidden></div>`;
-    $("#lowBtn").addEventListener("click", (e) => { onlyLow = !onlyLow; e.currentTarget.setAttribute("aria-pressed", onlyLow); renderMain(); });
     const gear = $("#gear");
     gear.hidden = false; gear.setAttribute("aria-pressed", editMode);
     gear.onclick = openSettings;
@@ -322,7 +353,7 @@
         <div class="sizes">${orderSizes(t).map((s) => {
           const v = shown(t, s), k = t.id + "|" + s;
           const cls = [v === 0 ? "zero" : isLow(t, s) ? "low" : "", pending[k] ? "pending" : ""].join(" ");
-          if (!editMode) return `<div class="size ro ${cls}"><span class="lbl">${s}</span><b class="qty" aria-label="${esc(t.name)} taglia ${s}: ${v} pezzi">${v}</b></div>`;
+          if (!editMode) return `<div class="size ro ${cls}"><span class="lbl">${s}</span><b class="qty" aria-label="${esc(t.name)} taglia ${s}: ${v} pezzi">${v}</b><i class="meter" style="--p:${Math.min(1, v / Math.max(1, (t.threshold || 3) * 3)).toFixed(2)}"></i></div>`;
           return `<div class="size ${cls}"><span class="lbl">${s}</span>
             <button data-b="${t.id}|${s}|-1" aria-label="Togli una ${s}">−</button>
             <input type="number" inputmode="numeric" min="0" value="${v}" data-set="${k}" aria-label="${esc(t.name)} taglia ${s}">
@@ -356,20 +387,33 @@
   const orderSizesText = (o) => SIZES.filter((s) => num((o.qty || {})[s]) > 0).map((s) => s + " × " + o.qty[s]).join(", ");
   const byWho = (r) => (r.by_email ? ` · ${esc(r.by_email.split("@")[0])}` : "");
 
+  const STATUSES = [["ordinato", "Ordinato"], ["pagato", "Pagato"], ["spedito", "Spedito"], ["consegnato", "Consegnato"], ["annullato", "Annullato"]];
+  const stLabel = (k) => (STATUSES.find((x) => x[0] === k) || [k, k])[1];
+  const saleTotal = (o) => (o.items || []).reduce((a, it) => a + num(it.unit_price) * num(it.qty), 0);
+  const salePieces = (o) => (o.items || []).reduce((a, it) => a + num(it.qty), 0);
+
   function renderSales() {
     const v = $("#v-sales"); if (!v) return;
-    const rev = sales.reduce((a, s) => a + num(s.unit_price) * num(s.qty), 0);
-    const pcs = sales.reduce((a, s) => a + num(s.qty), 0);
+    const live = sales.filter((o) => o.status !== "annullato");
+    const list = salesFilter === "all" ? sales : sales.filter((o) => o.status === salesFilter);
+    const count = (k) => sales.filter((o) => o.status === k).length;
     v.innerHTML = `<section class="hero"><h1 class="g">Vendite</h1></section>
-      <p class="hint">Ogni vendita toglie subito i pezzi dal magazzino. Se la elimini, i pezzi ci tornano.</p>
-      ${sales.length ? `<div class="sumline"><b>${pcs}</b> pezzi venduti · <b>${eur(rev)}</b> incassati</div>
-      <ol class="recs">${sales.map((s) => `<li class="rec">
-        <div class="rec-main"><b class="d">${esc(s.customer)}</b>
-          <div>${esc(s.tee_name || "Design eliminato")}, taglia ${esc(s.size)}${num(s.qty) > 1 ? " × " + num(s.qty) : ""}</div>
-          <div class="meta">${when(s.created_at)} · ${esc(s.payment)}${byWho(s)}</div></div>
-        <div class="rec-side"><b class="amt">${eur(num(s.unit_price) * num(s.qty))}</b><button class="link" data-sale-del="${esc(s.id)}">Elimina</button></div>
-      </li>`).join("")}</ol>`
-      : `<div class="empty"><span class="d">Nessuna vendita</span>Tocca «Nuova vendita» per registrare la prima.</div>`}`;
+      <p class="hint">Ogni ordine toglie subito i pezzi dal magazzino. Se lo annulli o lo elimini, i pezzi tornano.</p>
+      ${sales.length ? `<div class="sumline"><b>${live.length}</b> ordini · <b>${live.reduce((a, o) => a + salePieces(o), 0)}</b> pezzi · <b>${eur(live.reduce((a, o) => a + saleTotal(o), 0))}</b></div>
+      <div class="bar">
+        <button class="chipbtn" data-sfilter="all" aria-pressed="${salesFilter === "all"}">Tutti · ${sales.length}</button>
+        ${STATUSES.map(([k, l]) => (count(k) || salesFilter === k ? `<button class="chipbtn" data-sfilter="${k}" aria-pressed="${salesFilter === k}">${l} · ${count(k)}</button>` : "")).join("")}
+      </div>
+      ${list.length ? `<ol class="recs">${list.map((o) => `<li class="rec sale st-${esc(o.status)}">
+        <div class="rec-main"><b class="d">${esc(o.customer)}</b>
+          <ul class="items">${(o.items || []).map((it) => `<li><span>${esc(it.tee_name || "Modello eliminato")} · ${esc(it.size)}${num(it.qty) > 1 ? " × " + num(it.qty) : ""}</span><span>${eur(num(it.unit_price) * num(it.qty))}</span></li>`).join("")}</ul>
+          ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
+          <div class="meta">${when(o.created_at)} · ${esc(o.payment)}${byWho(o)}</div></div>
+        <div class="rec-side"><b class="amt">${eur(saleTotal(o))}</b>
+          <select class="status st-${esc(o.status)}" data-status-of="${esc(o.id)}" aria-label="Stato dell'ordine di ${esc(o.customer)}">${STATUSES.map(([k, l]) => `<option value="${k}" ${o.status === k ? "selected" : ""}>${l}</option>`).join("")}</select>
+          <button class="link" data-sale-del="${esc(o.id)}">Elimina</button></div>
+      </li>`).join("")}</ol>` : `<div class="empty"><span class="d">Niente qui</span>Nessun ordine in questo stato.</div>`}`
+      : `<div class="empty"><span class="d">Nessuna vendita</span>Tocca «Nuova vendita» per registrare il primo ordine.</div>`}`;
   }
 
   function renderOrders() {
@@ -395,18 +439,22 @@
     const v = $("#v-profit"); if (!v) return;
     const now = new Date(), from = period === "month" ? new Date(now.getFullYear(), now.getMonth(), 1).getTime() : 0;
     const inP = (r) => new Date(r.created_at).getTime() >= from;
-    const S = sales.filter(inP), O = orders.filter(inP);
-    let rev = 0, cogs = 0, pcs = 0, nocost = 0; const byTee = {}, byPay = {};
-    S.forEach((s) => {
-      const q = num(s.qty), r = num(s.unit_price) * q, c = num(s.unit_cost) * q, name = s.tee_name || "Design eliminato";
-      rev += r; cogs += c; pcs += q; if (s.unit_cost == null) nocost++;
-      const m = byTee[name] || (byTee[name] = { q: 0, r: 0, c: 0 }); m.q += q; m.r += r; m.c += c;
-      byPay[s.payment || "–"] = (byPay[s.payment || "–"] || 0) + r;
+    const S = sales.filter((o) => inP(o) && o.status !== "annullato"), O = orders.filter(inP);
+    let rev = 0, cogs = 0, pcs = 0, nocost = 0, due = 0; const byTee = {}, byPay = {};
+    S.forEach((o) => {
+      const tot = saleTotal(o);
+      if (o.status === "ordinato") due += tot;
+      byPay[o.payment || "–"] = (byPay[o.payment || "–"] || 0) + tot;
+      (o.items || []).forEach((it) => {
+        const q = num(it.qty), r = num(it.unit_price) * q, c = num(it.unit_cost) * q, name = it.tee_name || "Modello eliminato";
+        rev += r; cogs += c; pcs += q; if (it.unit_cost == null) nocost++;
+        const m = byTee[name] || (byTee[name] = { q: 0, r: 0, c: 0 }); m.q += q; m.r += r; m.c += c;
+      });
     });
     const spent = O.reduce((a, o) => a + num(o.unit_cost) * orderPieces(o), 0);
     const profit = rev - cogs, margin = rev > 0 ? Math.round((profit / rev) * 100) + "%" : "–";
     const stockVal = tees.reduce((a, t) => a + total(t) * num(costOf(t)), 0);
-    const cell = (b, l, alert) => `<div class="stat${alert ? " alert" : ""}"><b>${b}</b><span>${l}</span></div>`;
+    const cell = (b, l, cls) => `<div class="stat${cls ? " " + cls : ""}"><b>${b}</b><span>${l}</span></div>`;
     const rows = (obj, fmt) => Object.entries(obj).sort((a, b) => fmt.sort(b[1]) - fmt.sort(a[1])).map(([k, x]) => `<li><span>${esc(k)}</span><span>${fmt.text(x)}</span></li>`).join("");
     v.innerHTML = `<section class="hero"><h1 class="g">Guadagni</h1></section>
       <div class="bar">
@@ -414,11 +462,11 @@
         <button class="chipbtn" data-period="month" aria-pressed="${period === "month"}">Questo mese</button>
       </div>
       <div class="stats grid">
-        ${cell(eur(rev), "incassato")}${cell(eur(cogs), "costo dei pezzi venduti")}${cell(eur(profit), "guadagno", profit < 0)}${cell(margin, "margine")}
-        ${cell(pcs, "pezzi venduti")}${cell(eur(spent), "speso dal fornitore")}${cell(eur(rev - spent), "incassato meno speso")}${cell(eur(stockVal), "valore magazzino ora")}
+        ${cell(eur(rev), "venduto")}${cell(eur(cogs), "costo dei pezzi venduti")}${cell(eur(profit), "guadagno", profit < 0 ? "alert" : "good")}${cell(margin, "margine")}
+        ${cell(pcs, "pezzi venduti")}${cell(eur(due), "da incassare", due > 0 ? "warn" : "")}${cell(eur(spent), "speso dal fornitore")}${cell(eur(stockVal), "valore magazzino ora")}
       </div>
-      <p class="hint">Guadagno = incassato meno il costo dei soli pezzi venduti. «Incassato meno speso» conta invece tutto ciò che hai pagato al fornitore, anche la merce ancora in magazzino.</p>
-      ${nocost ? `<p class="hint warn">Per ${nocost} vendite manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo standard con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
+      <p class="hint">Guadagno = venduto meno il costo dei pezzi venduti. Gli ordini annullati non contano. «Da incassare» sono gli ordini ancora nello stato Ordinato.</p>
+      ${nocost ? `<p class="hint warn">Per ${nocost} righe vendute manca il costo dal fornitore, quindi il guadagno è sovrastimato. Imposta il costo standard con l'ingranaggio in alto a destra: vale per le vendite future.</p>` : ""}
       ${S.length ? `<section class="log"><h2 class="g">Per modello</h2><ol class="rows">${rows(byTee, { sort: (x) => x.r - x.c, text: (x) => `${x.q} pz · <b>${eur(x.r - x.c)}</b>` })}</ol></section>
       <section class="log"><h2 class="g">Per pagamento</h2><ol class="rows">${rows(byPay, { sort: (x) => x, text: (x) => `<b>${eur(x)}</b>` })}</ol></section>` : `<div class="empty"><span class="d">Ancora niente</span>I guadagni compaiono dopo la prima vendita.</div>`}`;
   }
@@ -463,44 +511,65 @@
   function teeLabel(t) { return `${esc(t.name)}, ${esc(t.color)}`; }
 
   function openSaleForm() {
-    if (!tees.length) { toast("Aggiungi prima un design nel Magazzino"); return; }
+    if (!tees.length) { toast("Aggiungi prima un modello nel Magazzino"); return; }
     const d = $("#dlg");
     d.innerHTML = `<form class="dlg" id="sf">
       <h3 class="g">Nuova vendita</h3>
       <label class="field"><span>Nome cliente</span><input name="customer" required maxlength="80" autocomplete="off"></label>
-      <label class="field"><span>Modello</span><select name="tee">${tees.map((t) => `<option value="${esc(t.id)}">${teeLabel(t)}</option>`).join("")}</select></label>
+      <div class="field"><span>Magliette</span><div id="lines"></div>
+        <button type="button" class="btn ghost addline" id="addLine">+ Aggiungi un'altra maglietta</button></div>
       <div class="row">
-        <label class="field"><span>Taglia</span><select name="size"></select></label>
-        <label class="field"><span>Quantità</span><input name="qty" type="number" inputmode="numeric" min="1" step="1" value="1" required></label>
-      </div>
-      <div class="row">
-        <label class="field"><span>Prezzo cad. €</span><input name="price" type="number" inputmode="decimal" min="0" step="0.5" required></label>
         <label class="field"><span>Pagamento</span><select name="payment">${PAYMENTS.map((p) => `<option>${p}</option>`).join("")}</select></label>
+        <label class="field"><span>Stato</span><select name="status">${STATUSES.filter(([k]) => k !== "annullato").map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
       </div>
+      <label class="field"><span>Note</span><input name="note" maxlength="200" autocomplete="off" placeholder="facoltativo: indirizzo, spedizione…"></label>
       <div class="total" id="stot"></div>
       <div class="err" id="ferr" role="alert"></div>
       <div class="foot"><button type="button" class="btn ghost" id="cancel">Annulla</button><button class="btn" id="save">Registra vendita</button></div>
     </form>`;
-    const f = $("#sf"), el = f.elements, teeOf = () => tees.find((t) => t.id === el.tee.value);
-    const fillSizes = () => {
-      const t = teeOf();
-      el.size.innerHTML = orderSizes(t).map((s) => `<option value="${s}">${s} · ${shown(t, s)} disp.</option>`).join("");
-      const first = orderSizes(t).find((s) => shown(t, s) > 0); if (first) el.size.value = first;
+    const f = $("#sf"), el = f.elements, L = $("#lines");
+    const q = (ln, k) => ln.querySelector(`[data-k="${k}"]`);
+    const lineHTML = () => `<div class="line">
+        <label class="field"><span>Modello</span><select data-k="tee">${tees.map((t) => `<option value="${esc(t.id)}">${teeLabel(t)}</option>`).join("")}</select></label>
+        <div class="row">
+          <label class="field"><span>Taglia</span><select data-k="size"></select></label>
+          <label class="field"><span>Pezzi</span><input data-k="qty" type="number" inputmode="numeric" min="1" step="1" value="1"></label>
+          <label class="field"><span>Prezzo €</span><input data-k="price" type="number" inputmode="decimal" min="0" step="0.5"></label>
+        </div>
+        <button type="button" class="link rm" data-rm>Rimuovi</button>
+      </div>`;
+    const setTee = (ln) => {
+      const t = tees.find((x) => x.id === q(ln, "tee").value);
+      q(ln, "size").innerHTML = orderSizes(t).map((s) => `<option value="${s}">${s} (${shown(t, s)})</option>`).join("");
+      const first = orderSizes(t).find((s) => shown(t, s) > 0); if (first) q(ln, "size").value = first;
+      q(ln, "price").value = priceOf(t) != null ? priceOf(t) : "";
     };
-    const upd = () => { const q = parseInt(el.qty.value, 10) || 0, p = parseFloat(el.price.value); $("#stot").textContent = q > 0 && !isNaN(p) ? "Totale: " + eur(q * p) : ""; };
-    el.tee.onchange = () => { const t = teeOf(); fillSizes(); el.price.value = priceOf(t) != null ? priceOf(t) : ""; upd(); };
+    const upd = () => {
+      const lines = [...L.children]; let n = 0, tot = 0;
+      lines.forEach((ln) => { const k = parseInt(q(ln, "qty").value, 10) || 0, p = parseFloat(q(ln, "price").value); n += k; if (!isNaN(p)) tot += k * p; });
+      lines.forEach((ln) => (ln.querySelector("[data-rm]").hidden = lines.length < 2));
+      $("#stot").textContent = n ? `${n} ${n === 1 ? "pezzo" : "pezzi"} · Totale: ${eur(tot)}` : "";
+    };
+    const add = () => { L.insertAdjacentHTML("beforeend", lineHTML()); setTee(L.lastElementChild); upd(); };
+    L.addEventListener("change", (e) => { if (e.target.dataset.k === "tee") { setTee(e.target.closest(".line")); upd(); } });
+    L.addEventListener("click", (e) => { const rm = e.target.closest("[data-rm]"); if (rm && L.children.length > 1) { rm.closest(".line").remove(); upd(); } });
     f.addEventListener("input", upd);
-    el.tee.onchange();
+    $("#addLine").onclick = add;
+    add();
     $("#cancel").onclick = () => d.close();
     f.onsubmit = async (e) => {
       e.preventDefault();
-      const customer = el.customer.value.trim(), qty = parseInt(el.qty.value, 10), price = parseFloat(el.price.value);
+      const customer = el.customer.value.trim(), items = [];
       if (!customer) { $("#ferr").textContent = "Scrivi il nome del cliente."; return; }
-      if (!(qty >= 1)) { $("#ferr").textContent = "Metti almeno 1 pezzo."; return; }
-      if (!(price >= 0)) { $("#ferr").textContent = "Inserisci il prezzo."; return; }
+      for (const ln of L.children) {
+        const qty = parseInt(q(ln, "qty").value, 10), price = parseFloat(q(ln, "price").value);
+        if (!(qty >= 1)) { $("#ferr").textContent = "Ogni maglietta deve avere almeno 1 pezzo."; return; }
+        if (!(price >= 0)) { $("#ferr").textContent = "Inserisci il prezzo di ogni maglietta."; return; }
+        items.push({ tee_id: q(ln, "tee").value, size: q(ln, "size").value, qty, price });
+      }
       $("#save").disabled = true; $("#ferr").textContent = "";
       try {
-        await api.createSale({ tee_id: el.tee.value, size: el.size.value, qty, customer, payment: el.payment.value, price });
+        await api.createSale({ customer, payment: el.payment.value, status: el.status.value, note: el.note.value.trim(), items });
         d.close(); toast("Vendita registrata, magazzino aggiornato"); reload();
       } catch (er) { $("#ferr").textContent = "Non salvata: " + (er.message || "errore"); $("#save").disabled = false; }
     };
@@ -541,12 +610,13 @@
   /* ================= EVENTS ================= */
   $("#app").addEventListener("click", (e) => {
     const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.sfilter) { salesFilter = b.dataset.sfilter; return renderSales(); }
     if (b.dataset.period) { period = b.dataset.period; return renderProfit(); }
     const fail = (er) => toast("Non riuscito: " + (er.message || "errore"));
     if (b.dataset.saleDel) {
       const x = sales.find((r) => String(r.id) === b.dataset.saleDel); if (!x) return;
-      if (confirm(`Eliminare la vendita di ${x.customer}? I ${x.qty} pezzi tornano in magazzino.`))
-        api.deleteSale(b.dataset.saleDel).then(() => { toast("Vendita eliminata"); reload(); }).catch(fail);
+      if (confirm(`Eliminare l'ordine di ${x.customer}?${x.status !== "annullato" ? " I pezzi tornano in magazzino." : ""}`))
+        api.deleteSale(b.dataset.saleDel).then(() => { toast("Ordine eliminato"); reload(); }).catch(fail);
       return;
     }
     if (b.dataset.ordRecv) {
@@ -570,7 +640,16 @@
         api.deleteTee(t.id).then(() => { toast("Design eliminato"); reload(); }).catch((er) => toast("Eliminazione non riuscita: " + er.message));
     }
   });
-  $("#app").addEventListener("change", (e) => { const k = e.target.dataset.set; if (k) { const [id, s] = k.split("|"); setExact(id, s, e.target.value); } });
+  $("#app").addEventListener("change", (e) => {
+    const sid = e.target.dataset.statusOf;
+    if (sid) {
+      const st = e.target.value, o = sales.find((r) => String(r.id) === sid);
+      if (st === "annullato" && !confirm(`Annullare l'ordine di ${o ? o.customer : ""}? I pezzi tornano in magazzino.`)) { renderSales(); return; }
+      e.target.disabled = true;
+      api.setSaleStatus(sid, st).then(() => { toast("Stato: " + stLabel(st)); reload(); }).catch((er) => { toast("Non riuscito: " + (er.message || "errore")); reload(); });
+      return;
+    }
+    const k = e.target.dataset.set; if (k) { const [id, s] = k.split("|"); setExact(id, s, e.target.value); } });
   $("#app").addEventListener("focusin", (e) => { if (e.target.dataset.set) e.target.select(); });
   $("#fab").addEventListener("click", () => { if (tab === "stock") { if (editMode) openForm(); } else if (tab === "sales") openSaleForm(); else if (tab === "orders") openOrderForm(); });
 
