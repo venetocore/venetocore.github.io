@@ -10,8 +10,8 @@ Gestione interna della scorta magliette. Sito statico su GitHub Pages, dati su S
 - `img/`: foto dei design iniziali. Quelle nuove si caricano dall'app e finiscono su Supabase Storage.
 
 ## Sezioni dell'app
-- **Magazzino**: giacenze per taglia. In Impostazioni → *Modifica design, prezzi e costi* si imposta per ogni modello il prezzo di vendita e il costo dal fornitore.
-- **Vendite**: ordini dei clienti (nome, modello, taglia, quantità, pagamento). Ogni vendita scala il magazzino; eliminarla rimette i pezzi. Prezzo e costo restano quelli del giorno della vendita.
+- **Magazzino**: giacenze per taglia, in sola lettura: cambiano solo con vendite e merce arrivata. L'ingranaggio in alto a destra apre le Impostazioni: prezzo di vendita e costo dal fornitore per tipo di maglietta (nera, bianca, grigia, altro), e il pulsante per la modalità Modifica (correzioni manuali con + e −, gestione dei design).
+- **Vendite**: ordini dei clienti (nome, modello, taglia, quantità, pagamento). Ogni vendita scala il magazzino; eliminarla rimette i pezzi. Prezzo e costo restano quelli del giorno della vendita; il prezzo viene proposto in base al tipo di maglietta.
 - **Fornitore**: ordini che fate al fornitore, con pezzi per taglia. Con «Arrivato» i pezzi entrano in magazzino (una sola volta).
 - **Guadagni**: incassato, costo dei pezzi venduti, guadagno e margine, spesa al fornitore, valore del magazzino. Filtro *Sempre* / *Questo mese*, dettaglio per modello e per metodo di pagamento.
 

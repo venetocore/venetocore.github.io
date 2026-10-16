@@ -12,7 +12,6 @@ create table if not exists public.tees (
   name text not null,
   color text not null default 'nero',
   price numeric(8,2),
-  cost numeric(8,2),
   threshold int not null default 3 check (threshold >= 0),
   image text,
   created_at timestamptz not null default now()
@@ -36,7 +35,12 @@ create table if not exists public.moves (
 );
 
 -- 2b. Vendite ai clienti e ordini al fornitore
-alter table public.tees add column if not exists cost numeric(8,2);
+-- Prezzo di vendita e costo dal fornitore per tipo di maglietta (colore)
+create table if not exists public.tee_types (
+  color text primary key,
+  price numeric(8,2) check (price >= 0),
+  cost numeric(8,2) check (cost >= 0)
+);
 
 create table if not exists public.sales (
   id bigint generated always as identity primary key,
@@ -75,6 +79,7 @@ alter table public.tees  enable row level security;
 alter table public.stock enable row level security;
 alter table public.moves enable row level security;
 alter table public.sales enable row level security;
+alter table public.tee_types enable row level security;
 alter table public.supplier_orders enable row level security;
 
 drop policy if exists team_read on public.team;
@@ -85,6 +90,9 @@ create policy tees_all on public.tees for all to authenticated using (public.is_
 
 drop policy if exists stock_all on public.stock;
 create policy stock_all on public.stock for all to authenticated using (public.is_team()) with check (public.is_team());
+
+drop policy if exists tee_types_all on public.tee_types;
+create policy tee_types_all on public.tee_types for all to authenticated using (public.is_team()) with check (public.is_team());
 
 drop policy if exists sales_all on public.sales;
 create policy sales_all on public.sales for all to authenticated using (public.is_team()) with check (public.is_team());
@@ -131,18 +139,19 @@ grant execute on function public.set_stock(uuid, text, int) to authenticated;
 -- Vendita: controlla la scorta, scala il magazzino e registra la vendita (prezzo e costo restano quelli del momento)
 create or replace function public.create_sale(p_tee uuid, p_size text, p_qty int, p_customer text, p_payment text, p_price numeric)
 returns bigint language plpgsql security invoker set search_path = public as $$
-declare v_tee public.tees; v_have int; v_id bigint;
+declare v_tee public.tees; v_have int; v_id bigint; v_cost numeric;
 begin
   if not public.is_team() then raise exception 'Non autorizzato'; end if;
   if p_qty is null or p_qty < 1 then raise exception 'Quantità non valida'; end if;
   select * into v_tee from public.tees where id = p_tee;
   if not found then raise exception 'Design non trovato'; end if;
+  select cost into v_cost from public.tee_types where color = v_tee.color;
   select qty into v_have from public.stock where tee_id = p_tee and size = p_size for update;
   if not found then raise exception 'Taglia non trovata'; end if;
   if v_have < p_qty then raise exception 'Scorta insufficiente: in magazzino ne restano %', v_have; end if;
   perform public.adjust_stock(p_tee, p_size, -p_qty);
   insert into public.sales (tee_id, tee_name, size, qty, customer, payment, unit_price, unit_cost)
-    values (p_tee, v_tee.name, p_size, p_qty, trim(p_customer), p_payment, p_price, v_tee.cost)
+    values (p_tee, v_tee.name, p_size, p_qty, trim(p_customer), p_payment, p_price, v_cost)
     returning id into v_id;
   return v_id;
 end $$;
@@ -186,7 +195,7 @@ grant execute on function public.receive_order(bigint) to authenticated;
 
 -- 5. Aggiornamenti in tempo reale tra telefoni
 do $$ declare t text; begin
-  foreach t in array array['tees','stock','moves','sales','supplier_orders'] loop
+  foreach t in array array['tees','stock','moves','sales','supplier_orders','tee_types'] loop
     begin execute format('alter publication supabase_realtime add table public.%I', t);
     exception when duplicate_object then null; end;
   end loop;
