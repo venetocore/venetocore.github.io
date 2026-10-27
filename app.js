@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  const SIZES = ["S", "M", "L", "XL"];
+  const SIZES = ["XS", "S", "M", "L", "XL"];
   const COLORS = { nero: "nera", bianco: "bianca", grigio: "grigia", altro: "di altro colore" };
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

@@ -82,7 +82,7 @@ img{display:block;max-width:100%}
 .tee-tot{text-align:right;font-weight:700;font-size:28px;line-height:1;letter-spacing:-.01em}
 .tee-tot small{display:block;font-weight:400;font-size:11px;color:var(--mid);margin-top:4px;letter-spacing:0}
 .sizes{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin-top:14px}
-.sizes:has(.ro){grid-template-columns:repeat(4,1fr)}
+.sizes:has(.ro){grid-template-columns:repeat(5,1fr)}
 .size{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;min-height:56px;overflow:hidden}
 .size .lbl{grid-column:1/-1;font-size:11px;font-weight:600;color:var(--mid);padding:8px 10px 0;letter-spacing:.06em;white-space:nowrap}
 .size button{background:transparent;border:0;cursor:pointer;font-size:24px;line-height:1;height:44px;border-radius:10px;touch-action:manipulation;color:var(--fg)}
@@ -224,7 +224,7 @@ dialog::backdrop{background:rgba(0,0,0,.75)}
 @media (max-width:640px){
   .stats{grid-template-columns:1fr 1fr}
   .sizes{grid-template-columns:1fr 1fr}
-  .sizes:has(.ro){grid-template-columns:repeat(4,1fr);gap:6px}
+  .sizes:has(.ro){grid-template-columns:repeat(5,1fr);gap:6px}
   .size.ro .qty{font-size:22px}
   .meter{margin:6px 8px 9px}
   .size .lbl{padding:7px 8px 0}
