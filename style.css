@@ -154,6 +154,16 @@ select.status option{background:#111;color:var(--fg);text-transform:none}
 .line .rm{position:absolute;top:4px;right:6px;min-height:32px;padding:6px;font-size:12px}
 .line .rm[hidden]{display:none}
 .addline{width:100%;border-style:dashed}
+.avail{font-size:12px;font-weight:600;margin:-4px 0 10px}
+.avail:empty{display:none}
+
+/* richieste in attesa di ristampa */
+.wait{font-style:normal;font-size:11px;font-weight:600;border:1px dashed var(--mid);border-radius:999px;padding:1px 7px;margin-left:4px;white-space:nowrap}
+.tee-wait{font-size:12px;margin-top:4px;font-weight:600}
+.ask{margin-top:20px}
+.ask small{display:block;color:var(--mid);font-size:12px;margin-top:2px}
+.ask .rows li > span:last-child{text-align:right;font-size:13px;color:var(--mid)}
+.ask .rows b{color:var(--fg)}
 
 /* miniature delle magliette negli elenchi */
 .mini{display:inline-block;flex:none;width:30px;height:30px;border-radius:7px;background:#fff;overflow:hidden}

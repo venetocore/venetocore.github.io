@@ -68,6 +68,8 @@ create table if not exists public.customer_order_items (
   unit_cost numeric(8,2)
 );
 create index if not exists customer_order_items_order on public.customer_order_items(order_id);
+-- Pezzi della riga non ancora presi dal magazzino: richieste da coprire con una ristampa
+alter table public.customer_order_items add column if not exists pending int not null default 0 check (pending >= 0);
 
 -- Se esiste la vecchia tabella sales (una maglietta per vendita), la copia una volta nei nuovi ordini.
 -- La tabella sales resta come copia di sicurezza.
@@ -173,11 +175,23 @@ grant execute on function public.set_stock(uuid, text, int) to authenticated;
 drop function if exists public.create_sale(uuid, text, int, text, text, numeric);
 drop function if exists public.delete_sale(bigint);
 
--- Nuovo ordine cliente: controlla la scorta di ogni riga, scala il magazzino, salva prezzo e costo del momento.
--- Se una riga non ha scorta, non viene salvato niente.
+-- Prende dal magazzino fino a p_qty pezzi e restituisce quanti ne ha presi
+create or replace function public.take_stock(p_tee uuid, p_size text, p_qty int)
+returns int language plpgsql security invoker set search_path = public as $$
+declare v_have int; v_take int;
+begin
+  select qty into v_have from public.stock where tee_id = p_tee and size = p_size for update;
+  if not found then raise exception 'Taglia non trovata'; end if;
+  v_take := least(v_have, greatest(0, p_qty));
+  if v_take > 0 then perform public.adjust_stock(p_tee, p_size, -v_take); end if;
+  return v_take;
+end $$;
+
+-- Nuovo ordine cliente: scala dal magazzino quello che c'è, salva prezzo e costo del momento.
+-- I pezzi che mancano restano in pending, da coprire con una ristampa.
 create or replace function public.create_customer_order(p_customer text, p_payment text, p_status text, p_note text, p_items jsonb)
 returns bigint language plpgsql security invoker set search_path = public as $$
-declare v_id bigint; it jsonb; v_tee public.tees; v_have int; v_qty int; v_cost numeric; v_size text;
+declare v_id bigint; it jsonb; v_tee public.tees; v_take int; v_qty int; v_cost numeric; v_size text;
 begin
   if not public.is_team() then raise exception 'Non autorizzato'; end if;
   if coalesce(trim(p_customer), '') = '' then raise exception 'Manca il nome del cliente'; end if;
@@ -191,28 +205,50 @@ begin
     if v_qty is null or v_qty < 1 then raise exception 'Quantità non valida'; end if;
     select * into v_tee from public.tees where id = (it ->> 'tee_id')::uuid;
     if not found then raise exception 'Modello non trovato'; end if;
-    select qty into v_have from public.stock where tee_id = v_tee.id and size = v_size for update;
-    if not found then raise exception 'Taglia non trovata'; end if;
-    if v_have < v_qty then raise exception 'Scorta insufficiente per % %: ne restano %', v_tee.name, v_size, v_have; end if;
-    perform public.adjust_stock(v_tee.id, v_size, -v_qty);
+    v_take := public.take_stock(v_tee.id, v_size, v_qty);
     v_cost := coalesce(v_tee.cost, (select cost from public.settings where id = 1));
-    insert into public.customer_order_items (order_id, tee_id, tee_name, size, qty, unit_price, unit_cost)
-      values (v_id, v_tee.id, v_tee.name, v_size, v_qty, (it ->> 'price')::numeric, v_cost);
+    insert into public.customer_order_items (order_id, tee_id, tee_name, size, qty, unit_price, unit_cost, pending)
+      values (v_id, v_tee.id, v_tee.name, v_size, v_qty, (it ->> 'price')::numeric, v_cost, v_qty - v_take);
   end loop;
   return v_id;
 end $$;
 
--- p_sign = 1 rimette in magazzino i pezzi di un ordine, -1 li ritoglie (con controllo scorta)
+-- p_sign = 1 rimette in magazzino i pezzi presi da un ordine, -1 li riprende (quelli che mancano tornano in pending).
+-- Negli ordini annullati pending non conta: nessun pezzo è preso.
 create or replace function public.customer_order_stock(p_id bigint, p_sign int)
 returns void language plpgsql security invoker set search_path = public as $$
-declare r record; v_have int;
+declare r record; v_take int;
 begin
   for r in select * from public.customer_order_items where order_id = p_id and tee_id is not null loop
-    select qty into v_have from public.stock where tee_id = r.tee_id and size = r.size for update;
-    if not found then continue; end if;
-    if p_sign < 0 and v_have < r.qty then raise exception 'Scorta insufficiente per % %: ne restano %', r.tee_name, r.size, v_have; end if;
-    perform public.adjust_stock(r.tee_id, r.size, p_sign * r.qty);
+    if not exists (select 1 from public.stock where tee_id = r.tee_id and size = r.size) then continue; end if;
+    if p_sign > 0 then
+      if r.qty - r.pending > 0 then perform public.adjust_stock(r.tee_id, r.size, r.qty - r.pending); end if;
+    else
+      v_take := public.take_stock(r.tee_id, r.size, r.qty);
+      update public.customer_order_items set pending = r.qty - v_take where id = r.id;
+    end if;
   end loop;
+end $$;
+
+-- Assegna la scorta disponibile alle righe in attesa, dagli ordini più vecchi (o solo all'ordine p_order).
+-- Restituisce quanti pezzi ha assegnato.
+create or replace function public.fill_backorders(p_order bigint default null)
+returns int language plpgsql security invoker set search_path = public as $$
+declare r record; v_take int; v_n int := 0;
+begin
+  if not public.is_team() then raise exception 'Non autorizzato'; end if;
+  for r in select i.id, i.tee_id, i.size, i.pending from public.customer_order_items i
+      join public.customer_orders o on o.id = i.order_id
+      where i.pending > 0 and i.tee_id is not null and o.status <> 'annullato' and (p_order is null or o.id = p_order)
+      order by o.created_at, i.id for update of i loop
+    if not exists (select 1 from public.stock where tee_id = r.tee_id and size = r.size) then continue; end if;
+    v_take := public.take_stock(r.tee_id, r.size, r.pending);
+    if v_take > 0 then
+      update public.customer_order_items set pending = pending - v_take where id = r.id;
+      v_n := v_n + v_take;
+    end if;
+  end loop;
+  return v_n;
 end $$;
 
 -- Cambio stato: annullare rimette i pezzi, togliere l'annullamento li riprende
@@ -242,6 +278,10 @@ begin
   delete from public.customer_orders where id = p_id;
 end $$;
 
+revoke all on function public.take_stock(uuid, text, int) from public, anon;
+revoke all on function public.fill_backorders(bigint) from public, anon;
+grant execute on function public.take_stock(uuid, text, int) to authenticated;
+grant execute on function public.fill_backorders(bigint) to authenticated;
 revoke all on function public.create_customer_order(text, text, text, text, jsonb) from public, anon;
 revoke all on function public.customer_order_stock(bigint, int) from public, anon;
 revoke all on function public.set_customer_order_status(bigint, text) from public, anon;
@@ -251,10 +291,12 @@ grant execute on function public.customer_order_stock(bigint, int) to authentica
 grant execute on function public.set_customer_order_status(bigint, text) to authenticated;
 grant execute on function public.delete_customer_order(bigint) to authenticated;
 
--- Ristampa arrivata: aggiunge i pezzi di ogni modello al magazzino, una sola volta.
+-- Ristampa arrivata: aggiunge i pezzi di ogni modello al magazzino, una sola volta,
+-- poi li assegna agli ordini in attesa. Restituisce quanti pezzi ha assegnato.
 -- Le ristampe nuove hanno le righe in items; quelle vecchie usano tee_id e qty.
+drop function if exists public.receive_order(bigint);
 create or replace function public.receive_order(p_id bigint)
-returns void language plpgsql security invoker set search_path = public as $$
+returns int language plpgsql security invoker set search_path = public as $$
 declare v_o public.supplier_orders; line jsonb; v_tee uuid; k text; v text;
 begin
   if not public.is_team() then raise exception 'Non autorizzato'; end if;
@@ -278,6 +320,7 @@ begin
     end loop;
   end if;
   update public.supplier_orders set status = 'ricevuto', received_at = now() where id = p_id;
+  return public.fill_backorders();
 end $$;
 
 revoke all on function public.receive_order(bigint) from public, anon;

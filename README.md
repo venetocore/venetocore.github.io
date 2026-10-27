@@ -11,11 +11,11 @@ Gestione interna della scorta magliette. Sito statico su GitHub Pages, dati su S
 
 ## Sezioni dell'app
 - **Magazzino**: giacenze per taglia, in sola lettura: cambiano solo con vendite e merce arrivata. L'ingranaggio in alto a destra apre le Impostazioni: prezzo di vendita e costo dal fornitore standard (di partenza 20 € e 7,50 €) e il pulsante per la modalità Modifica (correzioni manuali con + e −, gestione dei modelli). Un singolo modello può avere un prezzo o un costo diverso dallo standard: si imposta in modalità Modifica.
-- **Vendite**: ordini dei clienti con una o più magliette (modello, taglia, pezzi, prezzo), pagamento, note e stato: Ordinato, Pagato, Spedito, Consegnato, Annullato. Ogni ordine scala il magazzino; annullarlo o eliminarlo rimette i pezzi. Prezzo e costo restano quelli del giorno della vendita.
-- **Ristampe**: le magliette che fate ristampare, con pezzi per taglia e costo unitario. Con «Arrivata» i pezzi entrano in magazzino (una sola volta).
+- **Vendite**: ordini dei clienti con una o più magliette (modello, taglia, pezzi, prezzo), pagamento, note e stato: Ordinato, Pagato, Spedito, Consegnato, Annullato. Ogni ordine scala il magazzino; annullarlo o eliminarlo rimette i pezzi. Prezzo e costo restano quelli del giorno della vendita. Si possono registrare anche magliette che non ci sono: i pezzi mancanti restano «da ristampare» e l'ordine compare nel filtro *In attesa*. Se la scorta torna per altre vie (correzione a mano), «Prendi dal magazzino» la assegna all'ordine.
+- **Ristampe**: le magliette che fate ristampare, con pezzi per taglia e costo unitario. Con «Arrivata» i pezzi entrano in magazzino (una sola volta) e vanno subito agli ordini in attesa, dal più vecchio. In alto, *Richieste da coprire* riassume i pezzi richiesti e quelli già in arrivo; «Ordina ristampa per le richieste» apre una nuova ristampa già compilata con quello che manca. Filtri *In arrivo* / *Arrivate*.
 - **Guadagni**: venduto, costo dei pezzi venduti, guadagno e margine, da incassare (ordini ancora in stato Ordinato), spesa in ristampe, valore del magazzino. Gli ordini annullati non contano. Filtro *Sempre* / *Questo mese*, dettaglio per modello e per metodo di pagamento.
 
-Se avevi già eseguito `schema.sql` su Supabase, rieseguilo: aggiunge le nuove tabelle e il costo ai design senza toccare i dati.
+Se avevi già eseguito `schema.sql` su Supabase, rieseguilo: aggiunge le nuove tabelle e colonne (costo dei design, pezzi da ristampare negli ordini) senza toccare i dati.
 
 ## Messa online
 
